@@ -81,6 +81,16 @@ request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):0
 # (pane, source) and drops anything not greater, so a counter that restarts
 # with each session is silently ignored for the life of the pane.
 report_seq = time.time_ns()
+session_start_source = (
+    "resume" if os.environ.get("JCODE_HOOK_SOURCE") == "resume" else "new"
+)
+
+# Herdr keeps the last seq per (pane, source) and drops anything not greater.
+# On session_start two requests go out, so the anchor takes this seq and the
+# state report below must take a strictly higher one.
+anchor_seq = report_seq
+if session_id and event == "session_start":
+    report_seq += 1
 
 if state is None:
     request = {
@@ -104,9 +114,7 @@ else:
     if session_id:
         params["agent_session_id"] = session_id
         if event == "session_start":
-            params["session_start_source"] = (
-                "resume" if os.environ.get("JCODE_HOOK_SOURCE") == "resume" else "new"
-            )
+            params["session_start_source"] = session_start_source
     request = {
         "id": request_id,
         "method": "pane.report_agent",
@@ -117,18 +125,45 @@ message = os.environ.get("JCODE_HOOK_TOOL_NAME") if event == "post_tool" else No
 if message and state is not None:
     request["params"]["message"] = message
 
-try:
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(0.5)
-    client.connect(socket_path)
-    client.sendall((json.dumps(request) + "\n").encode())
+def send(request):
     try:
-        client.recv(4096)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(0.5)
+        client.connect(socket_path)
+        client.sendall((json.dumps(request) + "\n").encode())
+        try:
+            client.recv(4096)
+        except Exception:
+            pass
+        client.close()
     except Exception:
         pass
-    client.close()
-except Exception:
-    pass
+
+
+# A full lifecycle authority must anchor its session before Herdr will apply
+# its state. Without this, `pane.report_agent` is answered with `ok` and then
+# silently discarded, because `route_full_lifecycle_hook_report` has no
+# anchored session to match the report against and no live authority yet.
+# Verified 2026-08-24 against a real server: report_agent alone left the pane
+# at its previous state, and the same report after report_agent_session
+# applied immediately.
+if session_id and event == "session_start":
+    send(
+        {
+            "id": request_id + ":session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": pane_id,
+                "source": source,
+                "agent": agent,
+                "agent_session_id": session_id,
+                "session_start_source": session_start_source,
+                "seq": anchor_seq,
+            },
+        }
+    )
+
+send(request)
 PY
 
 exit 0

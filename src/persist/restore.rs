@@ -1035,6 +1035,39 @@ mod tests {
     }
 
     #[test]
+    fn restore_plan_resumes_a_jcode_session_after_a_server_restart() {
+        // The whole point of making jcode an official source: a pane that was
+        // running jcode must come back running the same jcode session, not a
+        // bare shell. Drives the same function the server calls on restart.
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:jcode".into(),
+            agent: "jcode".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session_goat_1787603691782_ec789f4bf85ebc01".into(),
+        };
+
+        assert!(restore_plan_for_snapshot(&session, false).is_none());
+        assert_eq!(
+            restore_plan_for_snapshot(&session, true).unwrap().argv,
+            vec![
+                "jcode",
+                "--resume",
+                "session_goat_1787603691782_ec789f4bf85ebc01"
+            ]
+        );
+
+        // An unofficial source reporting the same agent must still be refused,
+        // otherwise any process could make herdr launch a command on restart.
+        let unofficial = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "custom:jcode".into(),
+            agent: "jcode".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session_goat_1787603691782_ec789f4bf85ebc01".into(),
+        };
+        assert!(restore_plan_for_snapshot(&unofficial, true).is_none());
+    }
+
+    #[test]
     fn restore_plan_selection_suppresses_duplicates() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
