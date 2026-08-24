@@ -294,6 +294,24 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 1;
+// jcode ships no PowerShell hook: its integration is Unix-only, matching the
+// platforms gate in integration_target_supported.
+const JCODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const JCODE_HOOK_ASSET: &str = include_str!("assets/jcode/herdr-agent-state.sh");
+const JCODE_INTEGRATION_VERSION: u32 = 1;
+/// The jcode lifecycle events herdr subscribes to.
+///
+/// jcode dispatches one command per event and passes everything in
+/// `JCODE_HOOK_*` env vars, so a single script handles all five and reads
+/// `JCODE_HOOK_EVENT` to decide what to report. `post_tool` is included
+/// because a long tool call is the clearest evidence a turn is still running.
+const JCODE_HOOK_EVENTS: [&str; 5] = [
+    "session_start",
+    "turn_start",
+    "turn_end",
+    "post_tool",
+    "session_end",
+];
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

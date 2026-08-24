@@ -142,6 +142,10 @@ impl AgentSoundOverrides {
             Some(Agent::Qodercli) => self.qodercli,
             Some(Agent::Qwen) => self.qwen,
             Some(Agent::Maki) => self.maki,
+            // No per-agent override key, matching omp and mastracode: the
+            // sound config is a documented schema and jcode gets one only if
+            // someone asks for it.
+            Some(Agent::Jcode) => AgentSoundSetting::Default,
             None => AgentSoundSetting::Default,
         }
     }

@@ -868,3 +868,263 @@ pub(crate) fn is_toml_key(line: &str, key: &str) -> bool {
 
     trimmed[key.len()..].trim_start().starts_with('=')
 }
+
+// ---------------------------------------------------------------------------
+// jcode `[hooks]` table
+// ---------------------------------------------------------------------------
+
+/// Split a TOML value into the commands it holds.
+///
+/// jcode accepts either a single command string or an array of them for every
+/// hook event, so both shapes must round-trip. Basic and literal strings are
+/// both understood because a user writing the file by hand may use either.
+pub(crate) fn parse_toml_string_or_array(value: &str) -> Vec<String> {
+    let value = strip_toml_inline_comment(value).trim();
+    if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+        let mut items = Vec::new();
+        let mut rest = inner.trim();
+        while !rest.is_empty() {
+            let Some((item, remainder)) = take_toml_string(rest) else {
+                break;
+            };
+            items.push(item);
+            rest = remainder.trim_start().trim_start_matches(',').trim_start();
+        }
+        return items;
+    }
+    take_toml_string(value)
+        .map(|(item, _)| vec![item])
+        .unwrap_or_default()
+}
+
+/// Read one TOML string from the front of `input`, returning it and the rest.
+fn take_toml_string(input: &str) -> Option<(String, &str)> {
+    let input = input.trim_start();
+    let mut chars = input.char_indices();
+    let (_, quote) = chars.next()?;
+    match quote {
+        '\'' => {
+            // Literal strings have no escapes at all.
+            let end = input[1..].find('\'')? + 1;
+            Some((input[1..end].to_string(), &input[end + 1..]))
+        }
+        '"' => {
+            let mut out = String::new();
+            let mut escaped = false;
+            for (index, ch) in chars {
+                if escaped {
+                    out.push(match ch {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        'b' => '\u{08}',
+                        'f' => '\u{0c}',
+                        other => other,
+                    });
+                    escaped = false;
+                    continue;
+                }
+                match ch {
+                    '\\' => escaped = true,
+                    '"' => return Some((out, &input[index + 1..])),
+                    other => out.push(other),
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Drop a trailing `#` comment that sits outside any string.
+fn strip_toml_inline_comment(value: &str) -> &str {
+    let mut in_basic = false;
+    let mut in_literal = false;
+    let mut escaped = false;
+    for (index, ch) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_basic => escaped = true,
+            '"' if !in_literal => in_basic = !in_basic,
+            '\'' if !in_basic => in_literal = !in_literal,
+            '#' if !in_basic && !in_literal => return &value[..index],
+            _ => {}
+        }
+    }
+    value
+}
+
+/// Render commands back as the smallest valid TOML value.
+pub(crate) fn render_toml_string_or_array(commands: &[String]) -> String {
+    match commands {
+        [single] => toml_basic_string(single),
+        many => format!(
+            "[{}]",
+            many.iter()
+                .map(|command| toml_basic_string(command))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// The line range of the `[hooks]` table, or `None` when it is absent.
+///
+/// Returns `(header_index, end_index)` where `end_index` is exclusive and
+/// stops at the next table header.
+fn jcode_hooks_section(lines: &[String]) -> Option<(usize, usize)> {
+    let header = lines
+        .iter()
+        .position(|line| toml_table_header(line) == Some("[hooks]"))?;
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(header + 1)
+        .find(|(_, line)| toml_table_header(line).is_some())
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+    Some((header, end))
+}
+
+/// Index of `key` inside the `[hooks]` table, and the last line its value
+/// spans. A value can span lines when written as a multi-line array.
+fn jcode_hook_key_span(
+    lines: &[String],
+    section: (usize, usize),
+    key: &str,
+) -> Option<(usize, usize)> {
+    let (start, end) = section;
+    let index = (start + 1..end).find(|index| is_toml_key(&lines[*index], key))?;
+    let mut last = index;
+    let mut depth: i32 = 0;
+    for line in &lines[index..end] {
+        depth += line.chars().filter(|ch| *ch == '[').count() as i32;
+        depth -= line.chars().filter(|ch| *ch == ']').count() as i32;
+        if depth <= 0 {
+            break;
+        }
+        last += 1;
+    }
+    Some((index, last.min(end - 1)))
+}
+
+/// The existing value text for `key`, with the `key =` prefix removed.
+fn jcode_hook_value_text(lines: &[String], span: (usize, usize), key: &str) -> String {
+    let (first, last) = span;
+    let mut text = lines[first]
+        .trim()
+        .trim_start_matches(key)
+        .trim_start()
+        .trim_start_matches('=')
+        .to_string();
+    for line in &lines[first + 1..=last] {
+        text.push(' ');
+        text.push_str(line.trim());
+    }
+    text
+}
+
+/// Add the herdr hook command to every jcode lifecycle event, keeping any
+/// commands the user already configured.
+///
+/// jcode runs each configured command in declaration order, so appending is
+/// safe: an existing dispatcher keeps working and herdr reports alongside it.
+pub(crate) fn build_jcode_config_with_hooks(content: &str, hook_path: &Path) -> String {
+    let command = hook_command(hook_path, None);
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let trailing_newline = content.ends_with('\n') || content.is_empty();
+
+    let Some(section) = jcode_hooks_section(&lines) else {
+        let mut result = content.trim_end_matches('\n').to_string();
+        if !result.is_empty() {
+            result.push('\n');
+            result.push('\n');
+        }
+        result.push_str("[hooks]\n");
+        for event in super::JCODE_HOOK_EVENTS {
+            result.push_str(&format!(
+                "{event} = {}\n",
+                render_toml_string_or_array(std::slice::from_ref(&command))
+            ));
+        }
+        return result;
+    };
+
+    let (header, mut end) = section;
+    for event in super::JCODE_HOOK_EVENTS {
+        match jcode_hook_key_span(&lines, (header, end), event) {
+            Some((first, last)) => {
+                let existing = parse_toml_string_or_array(&jcode_hook_value_text(
+                    &lines,
+                    (first, last),
+                    event,
+                ));
+                let mut commands: Vec<String> = existing
+                    .into_iter()
+                    .filter(|existing| !is_matching_hook_command(existing, hook_path))
+                    .collect();
+                commands.push(command.clone());
+                let replacement = format!("{event} = {}", render_toml_string_or_array(&commands));
+                lines.splice(first..=last, std::iter::once(replacement));
+                end -= last - first;
+            }
+            None => {
+                lines.insert(
+                    end,
+                    format!(
+                        "{event} = {}",
+                        render_toml_string_or_array(std::slice::from_ref(&command))
+                    ),
+                );
+                end += 1;
+            }
+        }
+    }
+
+    join_toml_lines(lines, trailing_newline)
+}
+
+/// Remove the herdr hook command from every jcode lifecycle event, leaving
+/// any other configured command in place.
+pub(crate) fn remove_jcode_config_hooks(content: &str, hook_path: &Path) -> String {
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let trailing_newline = content.ends_with('\n');
+
+    let Some((header, mut end)) = jcode_hooks_section(&lines) else {
+        return content.to_string();
+    };
+
+    for event in super::JCODE_HOOK_EVENTS {
+        let Some((first, last)) = jcode_hook_key_span(&lines, (header, end), event) else {
+            continue;
+        };
+        let remaining: Vec<String> =
+            parse_toml_string_or_array(&jcode_hook_value_text(&lines, (first, last), event))
+                .into_iter()
+                .filter(|existing| !is_matching_hook_command(existing, hook_path))
+                .collect();
+        if remaining.is_empty() {
+            lines.splice(first..=last, std::iter::empty::<String>());
+            end -= last - first + 1;
+        } else {
+            let replacement = format!("{event} = {}", render_toml_string_or_array(&remaining));
+            lines.splice(first..=last, std::iter::once(replacement));
+            end -= last - first;
+        }
+    }
+
+    join_toml_lines(lines, trailing_newline)
+}
+
+/// Whether `command` invokes the herdr-managed hook script at `hook_path`.
+///
+/// Compared against every quoting variant herdr itself writes so a reinstall
+/// replaces the old entry instead of appending a duplicate.
+fn is_matching_hook_command(command: &str, hook_path: &Path) -> bool {
+    hook_command_variants(hook_path, None)
+        .iter()
+        .any(|variant| variant == command)
+}

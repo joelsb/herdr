@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Added a Jcode integration: `herdr integration install jcode` installs a lifecycle reporter that gives Herdr authoritative `idle`, `working`, and `blocked` state plus native session restore with `jcode --resume <id>`. Install appends Herdr's command to each event in Jcode's `[hooks]` table and preserves hook commands that are already configured.
+
 ## [0.8.2] - 2026-08-19
 
 ### Added

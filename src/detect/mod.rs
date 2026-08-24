@@ -63,10 +63,11 @@ pub enum Agent {
     Qodercli,
     Qwen,
     Maki,
+    Jcode,
 }
 
 impl Agent {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -89,8 +90,12 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::Jcode,
     ];
 
+    // Jcode is deliberately absent: its integration is a full lifecycle
+    // authority (see full_lifecycle_hook_authority), so screen manifest
+    // fallback would be a second, competing source of truth.
     pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
         Self::Pi,
         Self::Claude,
@@ -139,6 +144,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::Jcode => "jcode",
     }
 }
 
@@ -172,6 +178,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::Jcode => "jcode",
     }
 }
 
@@ -209,6 +216,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
+        "jcode" => Some(Agent::Jcode),
         _ => None,
     }
 }
@@ -301,6 +309,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
             | ("herdr:opencode", "opencode")
             | ("herdr:kilo", "kilo")
             | ("herdr:kimi", "kimi")
+            | ("herdr:jcode", "jcode")
     )
 }
 
@@ -804,6 +813,7 @@ mod tests {
             (Agent::Qodercli, "qodercli"),
             (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
+            (Agent::Jcode, "jcode"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
@@ -826,6 +836,13 @@ mod tests {
             "mastracode"
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+    }
+
+    #[test]
+    fn jcode_is_hook_authority_without_screen_manifest() {
+        assert!(full_lifecycle_hook_authority("herdr:jcode", "jcode"));
+        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Jcode));
+        assert_eq!(identify_agent("jcode"), Some(Agent::Jcode));
     }
 
     #[test]
