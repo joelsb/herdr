@@ -1340,6 +1340,12 @@ impl TerminalState {
                     Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
                 | ("herdr:antigravity_cli", "agy", None)
+                // `jcode --resume <id>` fires session_start twice: `new` for
+                // the session the process is constructed with, then `resume`
+                // for the session actually restored. Without replacement the
+                // pane stays anchored to the first id and every later report
+                // is dropped for the life of the pane.
+                | ("herdr:jcode", "jcode", Some("resume" | "new"))
         )
     }
 
@@ -2438,6 +2444,70 @@ mod tests {
             );
             assert_eq!(terminal.state, AgentState::Working);
         }
+    }
+
+    #[test]
+    fn jcode_resume_reanchors_full_lifecycle_authority() {
+        // `jc --resume <id>` fires session_start twice: once as `create` for
+        // the session object the process starts with, then again as `resume`
+        // for the session actually restored. Without replacement the pane
+        // stays anchored to the throwaway id and every later report is
+        // dropped, leaving the pane stuck at its first state.
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Jcode), AgentState::Idle);
+        let created = crate::agent_resume::AgentSessionRef::id("session_created").unwrap();
+        let resumed = crate::agent_resume::AgentSessionRef::id("session_resumed").unwrap();
+
+        assert!(
+            terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:jcode".into(),
+                    "jcode".into(),
+                    Some(created.clone()),
+                    Some(10),
+                    Some("new".into()),
+                )
+                .is_some(),
+            "jcode should anchor the session it starts with"
+        );
+        assert!(terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:jcode".into(),
+                "jcode".into(),
+                AgentState::Working,
+                None,
+                Some(created),
+                Some(11),
+            )
+            .is_some());
+
+        assert!(
+            terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:jcode".into(),
+                    "jcode".into(),
+                    Some(resumed.clone()),
+                    Some(12),
+                    Some("resume".into()),
+                )
+                .is_some(),
+            "a resumed jcode session must replace the session it started with"
+        );
+
+        assert!(
+            terminal
+                .set_hook_authority_with_session_ref(
+                    "herdr:jcode".into(),
+                    "jcode".into(),
+                    AgentState::Idle,
+                    None,
+                    Some(resumed),
+                    Some(13),
+                )
+                .is_some(),
+            "state from the resumed jcode session must apply"
+        );
+        assert_eq!(terminal.state, AgentState::Idle);
     }
 
     #[test]
