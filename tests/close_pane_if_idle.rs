@@ -416,3 +416,107 @@ fn alt_x_does_not_close_an_idle_pane_when_the_binding_is_not_configured() {
     drop(spawned);
     cleanup_test_base(&base);
 }
+
+/// A live handoff must carry each pane's terminal title through to the new
+/// server, not just into the imported runtime.
+///
+/// Titles are set by an OSC sequence that the *previous* server already
+/// consumed, so an imported pane is never "dirty" and the normal title sync
+/// skips it. Before the fix, every pane came out of a handoff with no title,
+/// which in the sidebar reads as every agent losing its name until the program
+/// inside happened to print a new one. Observed live on 2026-08-27: nine agents
+/// went nameless after a handoff, while their sessions stayed intact.
+#[test]
+fn live_handoff_keeps_pane_terminal_titles() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    fs::create_dir_all(&base).unwrap();
+    let spawned = spawn_server_with_idle_close(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("pane id")
+        .to_string();
+
+    // Set a title the way a real agent does: an OSC 2 sequence from the program
+    // inside the pane.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:title",
+            "method": "pane.send_input",
+            "params": {
+                "pane_id": pane_id,
+                "text": "printf '\\033]2;handoff-title-probe\\007'",
+                "keys": ["Enter"]
+            }
+        }),
+    ));
+
+    let title_before = wait_for_pane_title(&api_socket, &pane_id, Duration::from_secs(10));
+    assert_eq!(
+        title_before.as_deref(),
+        Some("handoff-title-probe"),
+        "the pane should carry its title before the handoff"
+    );
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    std::thread::sleep(Duration::from_secs(2));
+    wait_for_socket(&api_socket, Duration::from_secs(15));
+
+    let title_after = wait_for_pane_title(&api_socket, &pane_id, Duration::from_secs(10));
+    assert_eq!(
+        title_after.as_deref(),
+        Some("handoff-title-probe"),
+        "the title must survive a live handoff; losing it blanks every agent name in the sidebar"
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
+fn wait_for_pane_title(api_socket: &Path, pane_id: &str, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(response) = try_request(
+            api_socket,
+            serde_json::json!({"id":"test:panes","method":"pane.list","params":{}}),
+        ) {
+            if let Some(panes) = response["result"]["panes"].as_array() {
+                if let Some(pane) = panes
+                    .iter()
+                    .find(|pane| pane["pane_id"].as_str() == Some(pane_id))
+                {
+                    if let Some(title) = pane["terminal_title"].as_str() {
+                        if !title.is_empty() {
+                            return Some(title.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    None
+}

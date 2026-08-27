@@ -876,6 +876,24 @@ impl App {
                 .get(idx)
                 .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
         });
+
+        // Titles arrive on the manifest and are seeded into each imported
+        // runtime, but `sync_terminal_titles` only ever reads panes the parser
+        // has just marked dirty, and an imported pane is never dirty: its title
+        // was set by an OSC sequence the previous server consumed. Without this
+        // the seeded title stays inside the runtime and never reaches
+        // `TerminalState`, so every pane loses its sidebar name until the
+        // program inside happens to emit a new title. Publish them all once,
+        // here, while the imported set is exactly the panes that need it.
+        let imported_panes: std::collections::HashSet<crate::layout::PaneId> = app
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|ws| ws.tabs.iter())
+            .flat_map(|tab| tab.panes.keys().copied())
+            .collect();
+        app.sync_terminal_titles(&imported_panes);
+
         Ok(app)
     }
 
