@@ -1042,3 +1042,7 @@ mod tests {
         assert!(!modal_paste_target_active(&state));
     }
 }
+
+#[cfg(test)]
+#[path = "close_pane_if_idle_tests.rs"]
+mod close_pane_if_idle_tests;

@@ -418,6 +418,14 @@ fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<St
     crate::platform::available_pane_shell(runtime.child_pid()?)
 }
 
+/// Whether the pane's foreground job is nothing but the pane's own shell.
+///
+/// This is the same "pane is free" signal `agent.start` gates on, reused so the
+/// idle-close keybinding cannot disagree with it about whether a pane is busy.
+pub(crate) fn pane_is_at_bare_shell(runtime: &crate::terminal::TerminalRuntime) -> bool {
+    available_shell_name(runtime).is_some()
+}
+
 pub(super) fn runtime_hosts_agent(
     runtime: &crate::terminal::TerminalRuntime,
     expected: crate::detect::Agent,

@@ -74,6 +74,22 @@ impl App {
         self.selection_autoscroll_deadline = None;
         self.state.update_dismissed = true;
 
+        // `close_pane_if_idle` is deliberately resolved before the unconditional
+        // direct bindings below, and it is the only binding here that can decline
+        // to consume its key. When a program owns the pane the chord is forwarded
+        // untouched, which is what makes it safe to bind bare (e.g. "alt+x"):
+        // the running program sees the key, and only once the pane is back to a
+        // bare shell does the same chord close it.
+        if self.close_focused_pane_if_idle_requested(&key) {
+            debug!(
+                code = ?key_event.code,
+                modifiers = ?key_event.modifiers,
+                kind = ?key_event.kind,
+                "closing idle pane instead of forwarding to pane"
+            );
+            return None;
+        }
+
         if let Some(action) =
             super::terminal_direct_non_indexed_navigation_action(&self.state, &key)
         {

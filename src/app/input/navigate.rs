@@ -634,6 +634,69 @@ impl App {
         self.state.mode == Mode::ConfirmClose
     }
 
+    /// Handle a `close_pane_if_idle` chord.
+    ///
+    /// Returns `true` only when the key was consumed, meaning the focused pane
+    /// was idle and has been closed. Every other outcome returns `false` so the
+    /// caller forwards the key to the pane unchanged. That fail-open shape is the
+    /// whole point of the action: the chord can be bound bare (e.g. `alt+x`) and
+    /// still reach a running program, which is what allows one chord to first
+    /// quit the program in the pane and then close the pane it left behind.
+    ///
+    /// Idle means the pane's foreground job is the pane's own shell and nothing
+    /// else, which is the same signal `agent.start` uses to decide a pane is
+    /// free. A pane hosting a managed agent is never idle even if the shell
+    /// briefly looks free, because the agent is still being tracked.
+    pub(crate) fn close_focused_pane_if_idle_requested(&mut self, key: &TerminalKey) -> bool {
+        if !self
+            .state
+            .keybinds
+            .close_pane_if_idle
+            .matches_direct_key(key)
+        {
+            return false;
+        }
+        if !self.focused_pane_is_idle() {
+            return false;
+        }
+        self.close_focused_pane_via_api_requires_confirmation();
+        true
+    }
+
+    /// Whether the focused pane is sitting at a bare shell prompt.
+    ///
+    /// Fails closed: when the pane, its runtime or its process state cannot be
+    /// read, the pane counts as busy. An unreadable pane must never be closed by
+    /// a bare chord on a guess.
+    fn focused_pane_is_idle(&self) -> bool {
+        let Some((ws_idx, pane_id)) = self.focused_pane_target() else {
+            return false;
+        };
+        let Some(ws) = self.state.workspaces.get(ws_idx) else {
+            return false;
+        };
+        let Some(terminal_id) = ws.terminal_id(pane_id) else {
+            return false;
+        };
+        if let Some(terminal) = self.state.terminals.get(terminal_id) {
+            // A managed agent is still owned by herdr even when the shell looks
+            // free, e.g. during the agent-start settle window.
+            if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
+                return false;
+            }
+        }
+        // Resolve through the canonical accessor rather than indexing the
+        // runtime registry directly: panes can hold their runtime in more than
+        // one place, and this is the lookup the rest of the input path uses.
+        let Some(runtime) =
+            self.state
+                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+        else {
+            return false;
+        };
+        crate::app::agents::pane_is_at_bare_shell(runtime)
+    }
+
     pub(crate) fn zoom_focused_pane_via_api(&mut self) {
         self.runtime_pane_zoom(
             "tui.pane.zoom",
