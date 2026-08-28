@@ -68,6 +68,19 @@ impl App {
         }
     }
 
+    pub(super) fn save_idle_stale_after(&mut self, seconds: u64) {
+        if self.update_config_file("idle aging threshold", |content| {
+            crate::config::upsert_section_value(
+                content,
+                "ui",
+                "idle_stale_after_seconds",
+                &seconds.to_string(),
+            )
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
     pub(super) fn save_sound(&mut self, enabled: bool) {
         if self.update_config_file("sound setting", |content| {
             crate::config::upsert_section_bool(content, "ui.sound", "enabled", enabled)

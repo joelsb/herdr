@@ -113,13 +113,30 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 "agent status indicators",
                 "choose color dots or distinct symbols for each state",
                 &[
-                    ("color dots  ● ● ● ○ ·", StatusIndicatorStyle::Dots),
-                    ("distinct symbols  × ◐ ✓ ○ ·", StatusIndicatorStyle::Symbols),
+                    ("color dots  ● ● ● ◉ ○ ◌ ·", StatusIndicatorStyle::Dots),
+                    (
+                        "distinct symbols  × ◐ ✓ ! ○ ◌ ·",
+                        StatusIndicatorStyle::Symbols,
+                    ),
                 ],
                 app.status_indicators,
                 app.settings.list.selected,
                 p,
                 1,
+            );
+        }
+        SettingsSection::IdleStale => {
+            let choices: Vec<(&str, u64)> = crate::config::IDLE_STALE_CHOICES.to_vec();
+            render_modal_choice_list(
+                frame,
+                content_area,
+                "idle aging",
+                "how long before an unread result reads as stale, or a viewed pane as parked",
+                &choices,
+                app.idle_stale_after.as_secs(),
+                app.settings.list.selected,
+                p,
+                2,
             );
         }
         SettingsSection::Sound => {

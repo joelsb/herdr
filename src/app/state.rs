@@ -1025,6 +1025,7 @@ pub enum AgentPanelSort {
 pub enum SettingsSection {
     Theme,
     Indicators,
+    IdleStale,
     Sound,
     Toast,
     PaneLabels,
@@ -1035,6 +1036,7 @@ impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::Theme,
         Self::Indicators,
+        Self::IdleStale,
         Self::Sound,
         Self::Toast,
         Self::PaneLabels,
@@ -1045,6 +1047,7 @@ impl SettingsSection {
         match self {
             Self::Theme => "theme",
             Self::Indicators => "indicators",
+            Self::IdleStale => "idle aging",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",

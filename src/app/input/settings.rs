@@ -15,6 +15,7 @@ use crate::{
 pub(super) enum SettingsAction {
     SaveTheme(String),
     SaveStatusIndicators(StatusIndicatorStyle),
+    SaveIdleStaleAfter(u64),
     SaveSound(bool),
     SaveToastDelivery(ToastDelivery),
     SaveAgentBorderLabels(bool),
@@ -28,6 +29,7 @@ impl App {
             match action {
                 SettingsAction::SaveTheme(name) => self.save_theme(&name),
                 SettingsAction::SaveStatusIndicators(style) => self.save_status_indicators(style),
+                SettingsAction::SaveIdleStaleAfter(seconds) => self.save_idle_stale_after(seconds),
                 SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
                 SettingsAction::SaveToastDelivery(delivery) => self.save_toast_delivery(delivery),
                 SettingsAction::SaveAgentBorderLabels(enabled) => {
@@ -63,6 +65,25 @@ fn status_indicator_index(style: StatusIndicatorStyle) -> usize {
         StatusIndicatorStyle::Dots => 0,
         StatusIndicatorStyle::Symbols => 1,
     }
+}
+
+use crate::config::IDLE_STALE_CHOICES;
+
+fn idle_stale_index(threshold: std::time::Duration) -> usize {
+    let seconds = threshold.as_secs();
+    IDLE_STALE_CHOICES
+        .iter()
+        .position(|(_, choice)| *choice == seconds)
+        // A config-file value outside the offered list still has to land
+        // somewhere; the default is the least surprising landing spot.
+        .unwrap_or(1)
+}
+
+fn idle_stale_for_index(idx: usize) -> u64 {
+    IDLE_STALE_CHOICES
+        .get(idx)
+        .map(|(_, seconds)| *seconds)
+        .unwrap_or(300)
 }
 
 fn status_indicator_for_index(idx: usize) -> StatusIndicatorStyle {
@@ -188,6 +209,31 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = current_theme_index(&state.theme_name);
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                state.settings.section = SettingsSection::IdleStale;
+                state.settings.list.selected = idle_stale_index(state.idle_stale_after);
+            }
+            _ => {
+                if let Some(super::modal::ModalAction::Close) =
+                    super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS)
+                {
+                    cancel_settings(state);
+                }
+            }
+        },
+        SettingsSection::IdleStale => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => state.settings.list.move_prev(),
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.settings.list.move_next(IDLE_STALE_CHOICES.len())
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let seconds = idle_stale_for_index(state.settings.list.selected);
+                return Some(SettingsAction::SaveIdleStaleAfter(seconds));
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                state.settings.section = SettingsSection::Indicators;
+                state.settings.list.selected = status_indicator_index(state.status_indicators);
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
                 state.settings.section = SettingsSection::Sound;
                 state.settings.list.selected = usize::from(!state.sound_enabled());
             }
@@ -212,8 +258,8 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = toast_delivery_index(state.toast_delivery());
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                state.settings.section = SettingsSection::Indicators;
-                state.settings.list.selected = status_indicator_index(state.status_indicators);
+                state.settings.section = SettingsSection::IdleStale;
+                state.settings.list.selected = idle_stale_index(state.idle_stale_after);
             }
             _ => {
                 if let Some(super::modal::ModalAction::Close) =
@@ -305,6 +351,7 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
     state.settings.list.selected = match section {
         SettingsSection::Theme => current_theme_index(&state.theme_name),
         SettingsSection::Indicators => status_indicator_index(state.status_indicators),
+        SettingsSection::IdleStale => idle_stale_index(state.idle_stale_after),
         SettingsSection::Sound => usize::from(!state.sound_enabled()),
         SettingsSection::Toast => toast_delivery_index(state.toast_delivery()),
         SettingsSection::PaneLabels => usize::from(!state.agent_border_labels_enabled()),
@@ -386,7 +433,7 @@ impl AppState {
                     None
                 }
             }
-            SettingsSection::Toast => {
+            SettingsSection::IdleStale | SettingsSection::Toast => {
                 let list_y = area.y + 3;
                 if row >= list_y && row < list_y + 8 {
                     Some(((row - list_y) / 2) as usize)
@@ -416,6 +463,7 @@ impl AppState {
                         SettingsSection::Indicators => {
                             status_indicator_index(self.status_indicators)
                         }
+                        SettingsSection::IdleStale => idle_stale_index(self.idle_stale_after),
                         SettingsSection::Sound => usize::from(!self.sound_enabled()),
                         SettingsSection::Toast => toast_delivery_index(self.toast_delivery()),
                         SettingsSection::PaneLabels => {
@@ -434,6 +482,9 @@ impl AppState {
                         }
                         SettingsSection::Indicators => Some(SettingsAction::SaveStatusIndicators(
                             status_indicator_for_index(idx),
+                        )),
+                        SettingsSection::IdleStale => Some(SettingsAction::SaveIdleStaleAfter(
+                            idle_stale_for_index(idx),
                         )),
                         SettingsSection::Sound => {
                             let enabled = idx == 0;

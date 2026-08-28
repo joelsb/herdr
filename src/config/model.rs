@@ -854,6 +854,18 @@ pub enum TabBarPositionConfig {
     Bottom,
 }
 
+/// Idle-aging thresholds offered by the settings screen, in seconds.
+///
+/// A fixed list rather than free text: the settings screen has no text-input
+/// pattern to reuse, and the useful value is "longer than a glance", not a
+/// precise number. A config file may still set any value.
+pub const IDLE_STALE_CHOICES: &[(&str, u64)] = &[
+    ("2 minutes", 120),
+    ("5 minutes", 300),
+    ("10 minutes", 600),
+    ("30 minutes", 1800),
+];
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {

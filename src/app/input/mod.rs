@@ -405,6 +405,9 @@ impl App {
                         SettingsAction::SaveStatusIndicators(style) => {
                             self.save_status_indicators(style)
                         }
+                        SettingsAction::SaveIdleStaleAfter(seconds) => {
+                            self.save_idle_stale_after(seconds)
+                        }
                         SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
                         SettingsAction::SaveToastDelivery(delivery) => {
                             self.save_toast_delivery(delivery)
