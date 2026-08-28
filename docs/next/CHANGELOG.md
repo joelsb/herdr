@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Idle panes now age, so a finished result you have not read is distinguishable from one you have. An unread pane ages from when its result appeared and reads as `stale` past the threshold; a pane you have looked at ages from that look and reads as `parked`, so glancing at a pane keeps it fresh. An unread result going stale raises the usual needs-attention notification once per idle episode. The threshold defaults to five minutes and is configurable in Settings under **idle aging** or via `ui.idle_stale_after_seconds`.
 - Added a Jcode integration: `herdr integration install jcode` installs a lifecycle reporter that gives Herdr authoritative `idle`, `working`, and `blocked` state plus native session restore with `jcode --resume <id>`. Install appends Herdr's command to each event in Jcode's `[hooks]` table and preserves hook commands that are already configured.
 
 ## [0.8.2] - 2026-08-19

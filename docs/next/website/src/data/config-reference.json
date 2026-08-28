@@ -816,6 +816,12 @@
           ]
         },
         {
+          "key": "ui.idle_stale_after_seconds",
+          "type": "integer",
+          "default": "300",
+          "description": "How long an idle pane sits before its indicator ages: an unread result reads as stale, and a pane you have looked at reads as parked."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",
