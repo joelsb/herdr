@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;
@@ -20,6 +21,11 @@ pub struct PaneDetail {
     pub agent: Option<Agent>,
     pub state: AgentState,
     pub seen: bool,
+    /// The timestamp this pane's staleness is measured from.
+    ///
+    /// The result clock while unread, the last-look clock once seen, so a
+    /// client can age it without knowing which case it is in.
+    pub aged_from: Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub state_labels: HashMap<String, String>,
     pub tokens: HashMap<String, String>,
@@ -63,6 +69,7 @@ impl Tab {
                     agent: terminal.effective_known_agent(),
                     state: terminal.state,
                     seen: pane.seen,
+                    aged_from: pane_aged_from(pane, terminal),
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
                     state_labels: presentation.state_labels,
                     tokens: terminal.metadata_tokens.values(),
@@ -70,6 +77,26 @@ impl Tab {
             })
             .collect()
     }
+}
+
+/// Which clock a pane's staleness is measured from.
+///
+/// An unread result ages from when it appeared; once the user has looked, it
+/// ages from that look instead, so glancing at a pane keeps it fresh.
+pub(crate) fn pane_aged_from(pane: &crate::pane::PaneState, terminal: &TerminalState) -> Instant {
+    if pane.seen {
+        pane.seen_at
+    } else {
+        terminal.state_entered_at()
+    }
+}
+
+/// A workspace or tab's headline status, plus the clock to age it from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AggregateStatus {
+    pub state: AgentState,
+    pub seen: bool,
+    pub aged_from: Instant,
 }
 
 fn pane_attention_priority(state: AgentState, seen: bool) -> u8 {
@@ -86,17 +113,25 @@ impl Workspace {
     pub fn aggregate_state(
         &self,
         terminals: &HashMap<TerminalId, TerminalState>,
-    ) -> (AgentState, bool) {
+    ) -> AggregateStatus {
         self.tabs
             .iter()
             .flat_map(|tab| tab.panes.values())
             .filter_map(|pane| {
                 terminals
                     .get(&pane.attached_terminal_id)
-                    .map(|terminal| (terminal.state, pane.seen))
+                    .map(|terminal| AggregateStatus {
+                        state: terminal.state,
+                        seen: pane.seen,
+                        aged_from: pane_aged_from(pane, terminal),
+                    })
             })
-            .max_by_key(|(state, seen)| pane_attention_priority(*state, *seen))
-            .unwrap_or((AgentState::Unknown, true))
+            .max_by_key(|status| pane_attention_priority(status.state, status.seen))
+            .unwrap_or(AggregateStatus {
+                state: AgentState::Unknown,
+                seen: true,
+                aged_from: Instant::now(),
+            })
     }
 
     pub fn pane_details(&self, terminals: &HashMap<TerminalId, TerminalState>) -> Vec<PaneDetail> {
@@ -138,7 +173,8 @@ mod tests {
         let root = ws.tabs[0].root_pane;
         let terminal = terminal_for_pane(&ws, root);
         terminals.insert(terminal.id.clone(), terminal);
-        let (state, seen) = ws.aggregate_state(&terminals);
+        let status = ws.aggregate_state(&terminals);
+        let (state, seen) = (status.state, status.seen);
         assert_eq!(state, AgentState::Unknown);
         assert!(seen);
     }
@@ -161,7 +197,8 @@ mod tests {
         second_terminal.state = AgentState::Working;
         terminals.insert(second_terminal.id.clone(), second_terminal);
 
-        let (state, seen) = ws.aggregate_state(&terminals);
+        let status = ws.aggregate_state(&terminals);
+        let (state, seen) = (status.state, status.seen);
 
         assert_eq!(state, AgentState::Working);
         assert!(seen);
@@ -187,7 +224,8 @@ mod tests {
         let root = ws.tabs[0].panes.get_mut(&root_id).unwrap();
         root.seen = false;
 
-        let (state, seen) = ws.aggregate_state(&terminals);
+        let status = ws.aggregate_state(&terminals);
+        let (state, seen) = (status.state, status.seen);
 
         assert_eq!(state, AgentState::Idle);
         assert!(!seen);

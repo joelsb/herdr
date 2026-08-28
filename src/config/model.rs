@@ -914,6 +914,13 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// How long an idle pane sits before its indicator ages, in seconds.
+    /// Default: 300.
+    ///
+    /// An unread result is aged from when it appeared and then reads as stale;
+    /// a pane the user has looked at is aged from that look and then reads as
+    /// parked.
+    pub idle_stale_after_seconds: u64,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1141,6 +1148,7 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            idle_stale_after_seconds: 300,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1400,6 +1408,20 @@ status_indicators = "symbols"
         )
         .unwrap();
         assert_eq!(config.ui.status_indicators, StatusIndicatorStyle::Symbols);
+    }
+
+    #[test]
+    fn idle_stale_threshold_defaults_to_five_minutes_and_parses() {
+        assert_eq!(Config::default().ui.idle_stale_after_seconds, 300);
+
+        let config: Config = toml::from_str(
+            r#"
+[ui]
+idle_stale_after_seconds = 120
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.ui.idle_stale_after_seconds, 120);
     }
 
     #[test]

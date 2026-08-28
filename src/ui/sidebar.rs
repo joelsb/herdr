@@ -10,12 +10,13 @@ use ratatui::{
 
 use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
-use super::status::{state_icon, state_label, state_label_color};
+use super::status::{idle_age_at, state_icon, state_label, state_label_color};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
+use crate::workspace::AggregateStatus;
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
@@ -34,6 +35,8 @@ pub(crate) struct AgentPanelEntry {
     pub agent: Option<crate::detect::Agent>,
     pub state: AgentState,
     pub seen: bool,
+    /// Timestamp this entry's staleness is measured from; see PaneDetail.
+    pub aged_from: std::time::Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
@@ -174,6 +177,7 @@ fn collect_agent_panel_entries_with_runtimes(
                         agent: detail.agent,
                         state: detail.state,
                         seen: detail.seen,
+                        aged_from: detail.aged_from,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         state_labels: detail.state_labels,
                         tokens: detail.tokens,
@@ -194,7 +198,7 @@ pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static 
 }
 
 fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, indented: bool) -> u16 {
-    let (state, seen) = ws.aggregate_state(&app.terminals);
+    let status = ws.aggregate_state(&app.terminals);
     let label = if indented {
         grouped_child_display_label(
             &ws.display_name_from_terminals(&app.terminals),
@@ -210,7 +214,15 @@ fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, indent
         SpaceTokenContext {
             workspace: &label,
             branch: ws.branch().as_deref(),
-            state_text: state_label(state, seen),
+            state_text: state_label(
+                status.state,
+                idle_age_at(
+                    app,
+                    status.seen,
+                    status.aged_from,
+                    std::time::Instant::now(),
+                ),
+            ),
             ahead_behind: ws.git_ahead_behind(),
             tokens: &token_values,
             suppress_git_details: indented,
@@ -248,13 +260,17 @@ fn workspace_attention_priority(state: AgentState, seen: bool) -> u8 {
     }
 }
 
-fn space_aggregate_state(app: &AppState, key: &str) -> (AgentState, bool) {
+fn space_aggregate_state(app: &AppState, key: &str) -> AggregateStatus {
     app.workspaces
         .iter()
         .filter(|ws| ws.worktree_space().is_some_and(|space| space.key == key))
         .map(|ws| ws.aggregate_state(&app.terminals))
-        .max_by_key(|(state, seen)| workspace_attention_priority(*state, *seen))
-        .unwrap_or((AgentState::Unknown, true))
+        .max_by_key(|status| workspace_attention_priority(status.state, status.seen))
+        .unwrap_or(AggregateStatus {
+            state: AgentState::Unknown,
+            seen: true,
+            aged_from: std::time::Instant::now(),
+        })
 }
 
 pub(crate) fn workspace_parent_group_state(
@@ -547,7 +563,12 @@ fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<Resol
         .state_labels
         .get(agent_panel_status_key(entry.state, entry.seen))
         .map(String::as_str)
-        .unwrap_or_else(|| state_label(entry.state, entry.seen));
+        .unwrap_or_else(|| {
+            state_label(
+                entry.state,
+                idle_age_at(app, entry.seen, entry.aged_from, std::time::Instant::now()),
+            )
+        });
     tokens::agent_rows(&app.sidebar_agents, entry, label)
 }
 
@@ -762,6 +783,11 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         return;
     }
 
+    // One instant per frame: the age classification must be consistent across
+    // panes, and reading the clock per pane would put a syscall in a
+    // pane-scaled render loop.
+    let now = std::time::Instant::now();
+
     let is_navigating = matches!(app.mode, Mode::Navigate);
 
     let p = &app.palette;
@@ -791,8 +817,14 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         if y >= ws_area.y + ws_area.height {
             break;
         }
-        let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
+        let aggregate = ws.aggregate_state(&app.terminals);
+        let (agg_state, agg_seen) = (aggregate.state, aggregate.seen);
+        let (icon, icon_style) = state_icon(
+            agg_state,
+            idle_age_at(app, agg_seen, aggregate.aged_from, now),
+            app.status_indicators,
+            p,
+        );
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let selection_bg = workspace_selection_background(p, is_active);
@@ -859,8 +891,12 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             } else {
                 Style::default().fg(p.overlay0)
             };
-            let (icon, icon_style) =
-                state_icon(detail.state, detail.seen, app.status_indicators, p);
+            let (icon, icon_style) = state_icon(
+                detail.state,
+                idle_age_at(app, detail.seen, detail.aged_from, now),
+                app.status_indicators,
+                p,
+            );
 
             if is_active {
                 let buf = frame.buffer_mut();
@@ -1214,6 +1250,7 @@ fn render_workspace_list(
     is_navigating: bool,
 ) {
     let p = &app.palette;
+    let now = std::time::Instant::now();
     let dragged_ws_idx = match app.drag.as_ref().map(|drag| &drag.target) {
         Some(crate::app::state::DragTarget::WorkspaceReorder { source_ws_idx, .. }) => {
             Some(*source_ws_idx)
@@ -1253,7 +1290,7 @@ fn render_workspace_list(
         let is_active = Some(i) == app.active;
         let is_dragged = dragged_ws_idx == Some(i);
         let highlighted = selected || is_active || is_dragged;
-        let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
+        let agg_status = ws.aggregate_state(&app.terminals);
 
         if highlighted {
             let bg = if selected {
@@ -1299,14 +1336,16 @@ fn render_workspace_list(
                     )
                 })
                 .is_none_or(|entry_idx| !next_entry_is_indented_workspace(&entries, entry_idx));
-        let (display_state, display_seen) = parent_group
+        let display_status = parent_group
             .as_ref()
             .filter(|(_, collapsed)| *collapsed)
             .map(|(key, _)| space_aggregate_state(app, key))
-            .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
+            .unwrap_or(agg_status);
+        let (display_state, display_seen) = (display_status.state, display_status.seen);
+        let display_age = idle_age_at(app, display_seen, display_status.aged_from, now);
+        let state_icon = state_icon(display_state, display_age, app.status_indicators, p);
         let state_text_style = Style::default()
-            .fg(state_label_color(display_state, display_seen, p))
+            .fg(state_label_color(display_state, display_age, p))
             .add_modifier(Modifier::DIM);
         let branch_style = Style::default().fg(if selected || is_active {
             p.mauve
@@ -1319,7 +1358,7 @@ fn render_workspace_list(
             SpaceTokenContext {
                 workspace: &display_label,
                 branch: ws.branch().as_deref(),
-                state_text: state_label(display_state, display_seen),
+                state_text: state_label(display_state, display_age),
                 ahead_behind: ws.git_ahead_behind(),
                 tokens: &token_values,
                 suppress_git_details: card.indented,
@@ -1436,6 +1475,7 @@ fn render_agent_detail(
     area: Rect,
 ) {
     let p = &app.palette;
+    let now = std::time::Instant::now();
 
     if area.height < 3 {
         return;
@@ -1493,7 +1533,8 @@ fn render_agent_detail(
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
     for (index, detail) in details.iter().enumerate().skip(scroll) {
-        let label_color = state_label_color(detail.state, detail.seen, p);
+        let detail_age = idle_age_at(app, detail.seen, detail.aged_from, now);
+        let label_color = state_label_color(detail.state, detail_age, p);
         let rows = resolved_agent_rows(app, detail);
         let height = (rows.len().max(1) as u16).min(body.height);
         if row_y.saturating_add(height) > body_bottom {
@@ -1517,7 +1558,7 @@ fn render_agent_detail(
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
+        let state_icon = state_icon(detail.state, detail_age, app.status_indicators, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];

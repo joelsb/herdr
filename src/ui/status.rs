@@ -193,53 +193,132 @@ pub(super) fn render_config_diagnostic(frame: &mut Frame, area: Rect, message: &
     }
 }
 
+/// How long an idle pane has been that way, and whether the user has looked.
+///
+/// This replaces the older bare `seen: bool` at the presentation boundary: it
+/// carries the same acknowledgement fact plus the age, and being one value
+/// makes the contradictory `(seen = true, aged-from-result-time)` pair
+/// unrepresentable.
+///
+/// Two clocks feed it, because the two halves ask different questions. An
+/// unseen pane is aged from when its result appeared, so the age means "how
+/// long has this been sitting unread". A seen pane is aged from the last look,
+/// so glancing at a pane keeps it out of the parked bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleAge {
+    /// Finished recently, user has not looked yet.
+    FreshUnseen,
+    /// Finished a while ago and the user still has not looked.
+    StaleUnseen,
+    /// User looked recently; still in their working set.
+    FreshSeen,
+    /// User looked a while ago and left it alone; deliberately parked.
+    ParkedSeen,
+}
+
+impl IdleAge {
+    /// Whether this age is worth interrupting the user about.
+    ///
+    /// Only an unread result qualifies. A pane the user looked at and left is a
+    /// deliberate choice, so parking it silently is the point.
+    pub(crate) fn warrants_unread_alert(self) -> bool {
+        matches!(self, Self::StaleUnseen)
+    }
+}
+
+/// Resolve an idle age for one pane at render time.
+///
+/// `aged_from` is whichever clock applies, chosen by the server side; this only
+/// measures it. Takes a caller-supplied `now` so a whole frame classifies
+/// against one instant instead of re-reading the clock per pane.
+pub(crate) fn idle_age_at(
+    app: &crate::app::AppState,
+    seen: bool,
+    aged_from: std::time::Instant,
+    now: std::time::Instant,
+) -> IdleAge {
+    idle_age_for(
+        seen,
+        now.saturating_duration_since(aged_from),
+        app.idle_stale_after,
+    )
+}
+
+/// Classify an idle pane from its acknowledgement and the elapsed time on
+/// whichever clock applies.
+///
+/// The caller picks the clock, because only it knows which timestamp belongs to
+/// which half: `state_entered_at` for an unseen pane, `seen_at` for a seen one.
+/// The boundary lands on the aged side, so at exactly the threshold a result
+/// counts as having sat long enough.
+pub(crate) fn idle_age_for(
+    seen: bool,
+    elapsed: std::time::Duration,
+    threshold: std::time::Duration,
+) -> IdleAge {
+    match (seen, elapsed >= threshold) {
+        (false, false) => IdleAge::FreshUnseen,
+        (false, true) => IdleAge::StaleUnseen,
+        (true, false) => IdleAge::FreshSeen,
+        (true, true) => IdleAge::ParkedSeen,
+    }
+}
+
 pub(super) fn state_icon_symbol(
     state: AgentState,
-    seen: bool,
+    age: IdleAge,
     indicator_style: StatusIndicatorStyle,
 ) -> &'static str {
-    match (indicator_style, state, seen) {
+    match (indicator_style, state, age) {
         (StatusIndicatorStyle::Dots, AgentState::Blocked, _) => "●",
         (StatusIndicatorStyle::Dots, AgentState::Working, _) => "●",
-        (StatusIndicatorStyle::Dots, AgentState::Idle, false) => "●",
-        (StatusIndicatorStyle::Dots, AgentState::Idle, true) => "○",
+        (StatusIndicatorStyle::Dots, AgentState::Idle, IdleAge::FreshUnseen) => "●",
+        (StatusIndicatorStyle::Dots, AgentState::Idle, IdleAge::StaleUnseen) => "◉",
+        (StatusIndicatorStyle::Dots, AgentState::Idle, IdleAge::FreshSeen) => "○",
+        (StatusIndicatorStyle::Dots, AgentState::Idle, IdleAge::ParkedSeen) => "◌",
         (StatusIndicatorStyle::Dots, AgentState::Unknown, _) => "·",
         (StatusIndicatorStyle::Symbols, AgentState::Blocked, _) => "×",
         (StatusIndicatorStyle::Symbols, AgentState::Working, _) => "◐",
-        (StatusIndicatorStyle::Symbols, AgentState::Idle, false) => "✓",
-        (StatusIndicatorStyle::Symbols, AgentState::Idle, true) => "○",
+        (StatusIndicatorStyle::Symbols, AgentState::Idle, IdleAge::FreshUnseen) => "✓",
+        (StatusIndicatorStyle::Symbols, AgentState::Idle, IdleAge::StaleUnseen) => "!",
+        (StatusIndicatorStyle::Symbols, AgentState::Idle, IdleAge::FreshSeen) => "○",
+        (StatusIndicatorStyle::Symbols, AgentState::Idle, IdleAge::ParkedSeen) => "◌",
         (StatusIndicatorStyle::Symbols, AgentState::Unknown, _) => "·",
     }
 }
 
 pub(super) fn state_icon(
     state: AgentState,
-    seen: bool,
+    age: IdleAge,
     indicator_style: StatusIndicatorStyle,
     p: &Palette,
 ) -> (&'static str, Style) {
     (
-        state_icon_symbol(state, seen, indicator_style),
-        Style::default().fg(state_label_color(state, seen, p)),
+        state_icon_symbol(state, age, indicator_style),
+        Style::default().fg(state_label_color(state, age, p)),
     )
 }
 
-pub(super) fn state_label(state: AgentState, seen: bool) -> &'static str {
-    match (state, seen) {
+pub(super) fn state_label(state: AgentState, age: IdleAge) -> &'static str {
+    match (state, age) {
         (AgentState::Blocked, _) => "blocked",
         (AgentState::Working, _) => "working",
-        (AgentState::Idle, false) => "done",
-        (AgentState::Idle, true) => "idle",
+        (AgentState::Idle, IdleAge::FreshUnseen) => "done",
+        (AgentState::Idle, IdleAge::StaleUnseen) => "stale",
+        (AgentState::Idle, IdleAge::FreshSeen) => "idle",
+        (AgentState::Idle, IdleAge::ParkedSeen) => "parked",
         (AgentState::Unknown, _) => "idle",
     }
 }
 
-pub(super) fn state_label_color(state: AgentState, seen: bool, p: &Palette) -> Color {
-    match (state, seen) {
+pub(super) fn state_label_color(state: AgentState, age: IdleAge, p: &Palette) -> Color {
+    match (state, age) {
         (AgentState::Blocked, _) => p.red,
         (AgentState::Working, _) => p.yellow,
-        (AgentState::Idle, false) => p.teal,
-        (AgentState::Idle, true) => p.green,
+        (AgentState::Idle, IdleAge::FreshUnseen) => p.teal,
+        (AgentState::Idle, IdleAge::StaleUnseen) => p.peach,
+        (AgentState::Idle, IdleAge::FreshSeen) => p.green,
+        (AgentState::Idle, IdleAge::ParkedSeen) => p.overlay0,
         (AgentState::Unknown, _) => p.overlay0,
     }
 }
@@ -248,6 +327,7 @@ pub(super) fn state_label_color(state: AgentState, seen: bool, p: &Palette) -> C
 mod tests {
     use super::*;
     use crate::config::{ToastClipboardPosition, ToastHerdrPosition};
+    use std::time::Duration;
 
     fn toast() -> ToastNotification {
         ToastNotification {
@@ -269,25 +349,103 @@ mod tests {
     fn state_icons_support_dot_and_distinct_symbol_styles() {
         let palette = Palette::catppuccin();
         for (indicator_style, expected_symbols) in [
-            (StatusIndicatorStyle::Dots, ["●", "●", "●", "○", "·"]),
-            (StatusIndicatorStyle::Symbols, ["×", "◐", "✓", "○", "·"]),
+            (
+                StatusIndicatorStyle::Dots,
+                ["●", "●", "●", "◉", "○", "◌", "·"],
+            ),
+            (
+                StatusIndicatorStyle::Symbols,
+                ["×", "◐", "✓", "!", "○", "◌", "·"],
+            ),
         ] {
-            for ((state, seen, color), expected_symbol) in [
-                (AgentState::Blocked, true, palette.red),
-                (AgentState::Working, true, palette.yellow),
-                (AgentState::Idle, false, palette.teal),
-                (AgentState::Idle, true, palette.green),
-                (AgentState::Unknown, true, palette.overlay0),
+            for ((state, age, color, label), expected_symbol) in [
+                (
+                    AgentState::Blocked,
+                    IdleAge::FreshSeen,
+                    palette.red,
+                    "blocked",
+                ),
+                (
+                    AgentState::Working,
+                    IdleAge::FreshSeen,
+                    palette.yellow,
+                    "working",
+                ),
+                (AgentState::Idle, IdleAge::FreshUnseen, palette.teal, "done"),
+                (
+                    AgentState::Idle,
+                    IdleAge::StaleUnseen,
+                    palette.peach,
+                    "stale",
+                ),
+                (AgentState::Idle, IdleAge::FreshSeen, palette.green, "idle"),
+                (
+                    AgentState::Idle,
+                    IdleAge::ParkedSeen,
+                    palette.overlay0,
+                    "parked",
+                ),
+                (
+                    AgentState::Unknown,
+                    IdleAge::FreshSeen,
+                    palette.overlay0,
+                    "idle",
+                ),
             ]
             .into_iter()
             .zip(expected_symbols)
             {
-                let (actual_symbol, style) = state_icon(state, seen, indicator_style, &palette);
+                let (actual_symbol, style) = state_icon(state, age, indicator_style, &palette);
                 assert_eq!(actual_symbol, expected_symbol);
                 assert_eq!(display_width_u16(actual_symbol), 1);
                 assert_eq!(style.fg, Some(color));
+                assert_eq!(state_label(state, age), label);
             }
         }
+    }
+
+    #[test]
+    fn idle_age_classifies_by_the_right_clock() {
+        let threshold = Duration::from_secs(300);
+
+        assert_eq!(
+            idle_age_for(false, Duration::from_secs(299), threshold),
+            IdleAge::FreshUnseen
+        );
+        assert_eq!(
+            idle_age_for(true, Duration::from_secs(299), threshold),
+            IdleAge::FreshSeen
+        );
+
+        // The boundary lands on the aged side: at exactly the threshold the
+        // result has been sitting long enough to count.
+        assert_eq!(
+            idle_age_for(false, threshold, threshold),
+            IdleAge::StaleUnseen
+        );
+        assert_eq!(
+            idle_age_for(true, threshold, threshold),
+            IdleAge::ParkedSeen
+        );
+
+        assert_eq!(
+            idle_age_for(false, Duration::from_secs(3600), threshold),
+            IdleAge::StaleUnseen
+        );
+        assert_eq!(
+            idle_age_for(true, Duration::from_secs(3600), threshold),
+            IdleAge::ParkedSeen
+        );
+    }
+
+    #[test]
+    fn only_an_unseen_stale_pane_is_worth_alerting_about() {
+        // The alert exists for results the user has never looked at. A seen
+        // pane going parked is a deliberate choice, not something to interrupt.
+        assert!(IdleAge::StaleUnseen.warrants_unread_alert());
+        assert!(!IdleAge::FreshUnseen.warrants_unread_alert());
+        assert!(!IdleAge::FreshSeen.warrants_unread_alert());
+        assert!(!IdleAge::ParkedSeen.warrants_unread_alert());
     }
 
     #[test]

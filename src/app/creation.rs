@@ -491,7 +491,8 @@ impl App {
 
     pub(super) fn workspace_info(&self, index: usize) -> crate::api::schema::WorkspaceInfo {
         let ws = &self.state.workspaces[index];
-        let (agg_state, seen) = ws.aggregate_state(&self.state.terminals);
+        let aggregate = ws.aggregate_state(&self.state.terminals);
+        let (agg_state, seen) = (aggregate.state, aggregate.seen);
         crate::api::schema::WorkspaceInfo {
             workspace_id: self.public_workspace_id(index),
             number: index + 1,

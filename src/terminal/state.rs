@@ -140,6 +140,13 @@ pub struct TerminalState {
     metadata_report_agents: HashMap<String, Agent>,
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
+    /// When `state` last actually changed.
+    ///
+    /// Detection re-reports the same state on every screen scan, so this only
+    /// advances on a real transition. Clients derive time-in-state from it,
+    /// which is how a finished-but-unread result is told apart from a stale
+    /// one. Deliberately unaffected by pane visibility or `PaneState::seen`.
+    state_entered_at: Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
@@ -174,6 +181,7 @@ impl TerminalState {
             metadata_report_agents: HashMap::new(),
             metadata_token_sequence_sources: std::collections::HashSet::new(),
             state: AgentState::Unknown,
+            state_entered_at: Instant::now(),
             last_agent_state_change_seq: None,
             revision: 0,
             launch_argv: None,
@@ -2064,6 +2072,7 @@ impl TerminalState {
         self.suppressed_full_lifecycle_hook_reports.clear();
         self.stale_full_lifecycle_hook_sessions.clear();
         self.state = AgentState::Unknown;
+        self.state_entered_at = Instant::now();
         self.last_agent_state_change_seq = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
@@ -2071,6 +2080,14 @@ impl TerminalState {
         self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
         self.clear_agent_name();
+    }
+
+    /// When this terminal last actually changed effective state.
+    ///
+    /// A getter rather than a public field so the "only advances on a real
+    /// transition" invariant stays enforceable from one place.
+    pub fn state_entered_at(&self) -> Instant {
+        self.state_entered_at
     }
 
     pub fn is_agent_terminal(&self) -> bool {
@@ -2159,6 +2176,7 @@ impl TerminalState {
         }
 
         self.state = state;
+        self.state_entered_at = now;
         Some(EffectiveStateChange {
             previous_agent_label,
             previous_known_agent,
@@ -2291,6 +2309,72 @@ mod tests {
         };
 
         assert_eq!(stabilize_agent_detection(detection), AgentState::Idle);
+    }
+
+    #[test]
+    fn state_entered_at_tracks_only_real_state_changes() {
+        let mut terminal = test_terminal();
+        let t0 = Instant::now();
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            t0,
+        );
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert_eq!(terminal.state_entered_at(), t0);
+
+        // A repeated report of the same state must not restart the clock: the
+        // idle-staleness buckets measure how long a result has been sitting,
+        // and detection re-reports the same state on every screen scan.
+        let later = t0 + Duration::from_secs(60);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            later,
+        );
+        assert_eq!(terminal.state_entered_at(), t0);
+
+        let moved = t0 + Duration::from_secs(90);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Working,
+            false,
+            false,
+            false,
+            false,
+            moved,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(terminal.state_entered_at(), moved);
+    }
+
+    #[test]
+    fn clearing_runtime_identity_resets_state_entered_at() {
+        let mut terminal = test_terminal();
+        let t0 = Instant::now();
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            t0,
+        );
+        assert_eq!(terminal.state_entered_at(), t0);
+
+        terminal.clear_agent_runtime_identity_after_respawn();
+        assert_eq!(terminal.state, AgentState::Unknown);
+        assert!(terminal.state_entered_at() >= t0);
     }
 
     #[test]

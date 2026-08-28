@@ -8,7 +8,7 @@ use ratatui::{
 
 use super::{
     scrollbar::{render_scrollbar, should_show_scrollbar},
-    status::{state_icon, state_label_color},
+    status::{idle_age_at, state_icon, state_label_color, IdleAge},
     text::{display_width_u16, middle_elide, truncate_end},
     widgets::{panel_contrast_fg, render_panel_shell},
 };
@@ -65,28 +65,28 @@ fn render_search(app: &AppState, frame: &mut Frame, area: Rect) {
         Some(NavigatorStateFilter::Blocked) => push_state_chip(
             &mut spans,
             crate::detect::AgentState::Blocked,
-            true,
+            IdleAge::FreshSeen,
             "blocked",
             app,
         ),
         Some(NavigatorStateFilter::Working) => push_state_chip(
             &mut spans,
             crate::detect::AgentState::Working,
-            true,
+            IdleAge::FreshSeen,
             "working",
             app,
         ),
         Some(NavigatorStateFilter::Idle) => push_state_chip(
             &mut spans,
             crate::detect::AgentState::Idle,
-            true,
+            IdleAge::FreshSeen,
             "idle",
             app,
         ),
         Some(NavigatorStateFilter::Done) => push_state_chip(
             &mut spans,
             crate::detect::AgentState::Idle,
-            false,
+            IdleAge::FreshUnseen,
             "done",
             app,
         ),
@@ -106,20 +106,24 @@ fn render_search(app: &AppState, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Render the navigator's active state-filter chip.
+///
+/// The chip stands for a filter, not for one pane, so it has no clock to age
+/// and always uses the fresh presentation.
 fn push_state_chip(
     spans: &mut Vec<Span<'static>>,
     state: crate::detect::AgentState,
-    seen: bool,
+    age: IdleAge,
     label: &'static str,
     app: &AppState,
 ) {
-    let (icon, icon_style) = state_icon(state, seen, app.status_indicators, &app.palette);
+    let (icon, icon_style) = state_icon(state, age, app.status_indicators, &app.palette);
     spans.push(Span::styled(icon, icon_style.add_modifier(Modifier::BOLD)));
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
         label,
         Style::default()
-            .fg(state_label_color(state, seen, &app.palette))
+            .fg(state_label_color(state, age, &app.palette))
             .add_modifier(Modifier::BOLD),
     ));
 }
@@ -201,7 +205,12 @@ fn render_row(
     } else {
         Style::default().fg(p.subtext0).bg(p.panel_bg)
     };
-    let (status_icon, status_style) = state_icon(row.status, row.seen, app.status_indicators, p);
+    let (status_icon, status_style) = state_icon(
+        row.status,
+        idle_age_at(app, row.seen, row.aged_from, std::time::Instant::now()),
+        app.status_indicators,
+        p,
+    );
     let status_style = if selected {
         base_style.add_modifier(Modifier::BOLD)
     } else if context_only {
@@ -261,7 +270,11 @@ fn render_row(
             Style::default().fg(p.overlay0).bg(p.panel_bg)
         } else {
             Style::default()
-                .fg(state_label_color(row.status, row.seen, p))
+                .fg(state_label_color(
+                    row.status,
+                    idle_age_at(app, row.seen, row.aged_from, std::time::Instant::now()),
+                    p,
+                ))
                 .bg(p.panel_bg)
         };
         frame.render_widget(
@@ -580,6 +593,7 @@ mod tests {
             meta: String::new(),
             status: AgentState::Idle,
             seen: true,
+            aged_from: std::time::Instant::now(),
             is_current: false,
             is_workspace,
             is_tab: false,

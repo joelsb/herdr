@@ -902,6 +902,8 @@ pub(crate) struct NavigatorRow {
     pub meta: String,
     pub status: AgentState,
     pub seen: bool,
+    /// Timestamp this row's staleness is measured from; see PaneDetail.
+    pub aged_from: std::time::Instant,
     pub is_current: bool,
     pub is_workspace: bool,
     pub is_tab: bool,
@@ -1466,6 +1468,11 @@ pub struct AppState {
     pub sidebar_section_split: f32,
     pub agent_panel_sort: AgentPanelSort,
     pub status_indicators: crate::config::StatusIndicatorStyle,
+    /// How long an idle pane sits before its indicator ages.
+    ///
+    /// Clients compare it against the relevant clock: the terminal's
+    /// state_entered_at for an unread result, the pane's seen_at once looked at.
+    pub idle_stale_after: std::time::Duration,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -1860,6 +1867,7 @@ impl AppState {
             sidebar_section_split: 0.5,
             agent_panel_sort: AgentPanelSort::Spaces,
             status_indicators: crate::config::StatusIndicatorStyle::Dots,
+            idle_stale_after: std::time::Duration::from_secs(300),
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
@@ -2343,6 +2351,7 @@ mod tests {
             meta: String::new(),
             status: crate::detect::AgentState::Idle,
             seen: true,
+            aged_from: std::time::Instant::now(),
             is_current: false,
             is_workspace,
             is_tab: false,

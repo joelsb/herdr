@@ -11,7 +11,7 @@ use super::sidebar::{
     next_entry_is_indented_workspace, workspace_list_entries_expanded, AgentPanelEntry,
     WorkspaceListEntry,
 };
-use super::status::{state_icon, state_icon_symbol};
+use super::status::{idle_age_at, state_icon, state_icon_symbol, IdleAge};
 use super::text::{display_width_u16, truncate_end};
 use crate::app::state::{Palette, ToastKind, ToastNotification};
 use crate::app::AppState;
@@ -326,8 +326,19 @@ fn render_header_status(
         return;
     };
 
-    let (state, seen) = ws.aggregate_state(&app.terminals);
-    let (dot, dot_style) = state_icon(state, seen, app.status_indicators, p);
+    let status = ws.aggregate_state(&app.terminals);
+    let state = status.state;
+    let (dot, dot_style) = state_icon(
+        state,
+        idle_age_at(
+            app,
+            status.seen,
+            status.aged_from,
+            std::time::Instant::now(),
+        ),
+        app.status_indicators,
+        p,
+    );
     let tab_label = mobile_tab_status(ws);
     let row1 = Rect::new(area.x, area.y, area.width, 1);
     let tab_w = display_width_u16(&tab_label)
@@ -407,7 +418,12 @@ fn render_switch_button(app: &AppState, frame: &mut Frame, area: Rect) {
     // "tap me" without the user reading the summary row.
     if global_agent_counts(app).blocked > 0 {
         let bx = area.x + area.width.saturating_sub(1);
-        let (symbol, style) = state_icon(AgentState::Blocked, true, app.status_indicators, p);
+        let (symbol, style) = state_icon(
+            AgentState::Blocked,
+            IdleAge::FreshSeen,
+            app.status_indicators,
+            p,
+        );
         frame.buffer_mut()[(bx, area.y)]
             .set_symbol(symbol)
             .set_style(style.bg(p.surface0));
@@ -476,6 +492,9 @@ fn render_mobile_switcher_content(
     }
 
     let p = &app.palette;
+    // One instant per frame: pane-scaled loops below must not each read the
+    // clock, and every pane in a frame should classify against the same now.
+    let now = std::time::Instant::now();
     let total_height = mobile_switcher_content_height(app);
     render_left_scrollbar(
         frame,
@@ -534,7 +553,12 @@ fn render_mobile_switcher_content(
                 entry.ws_idx == ws_idx && entry.tab_idx == tab_idx && entry.pane_id == pane_id
             });
             let bg = mobile_item_bg(false, active, p);
-            let (icon, icon_style) = state_icon(entry.state, entry.seen, app.status_indicators, p);
+            let (icon, icon_style) = state_icon(
+                entry.state,
+                idle_age_at(app, entry.seen, entry.aged_from, now),
+                app.status_indicators,
+                p,
+            );
             let title = Line::from(vec![
                 Span::styled("  ", Style::default().bg(bg)),
                 Span::styled(icon, icon_style.bg(bg)),
@@ -550,7 +574,7 @@ fn render_mobile_switcher_content(
                         .add_modifier(Modifier::BOLD),
                 ),
             ]);
-            let detail = mobile_agent_detail(entry);
+            let detail = mobile_agent_detail(app, entry, now);
             render_two_line_item(
                 frame,
                 viewport,
@@ -596,8 +620,14 @@ fn render_mobile_switcher_content(
         let active = Some(*ws_idx) == app.active;
         let selected = *ws_idx == app.selected;
         let bg = mobile_item_bg(selected, active, p);
-        let (state, seen) = ws.aggregate_state(&app.terminals);
-        let (dot, dot_style) = state_icon(state, seen, app.status_indicators, p);
+        let status = ws.aggregate_state(&app.terminals);
+        let state = status.state;
+        let (dot, dot_style) = state_icon(
+            state,
+            idle_age_at(app, status.seen, status.aged_from, now),
+            app.status_indicators,
+            p,
+        );
 
         let mut title_spans = vec![Span::styled("  ", Style::default().bg(bg))];
         // Worktrees of the same space render as branches off their parent, so a
@@ -735,7 +765,7 @@ fn render_mobile_switcher_content(
     }
 }
 
-fn mobile_agent_detail(entry: &AgentPanelEntry) -> String {
+fn mobile_agent_detail(app: &AppState, entry: &AgentPanelEntry, now: std::time::Instant) -> String {
     let mut parts = Vec::new();
     if let Some(tab_label) = entry.primary_tab_label.as_deref() {
         parts.push(tab_label.to_string());
@@ -747,7 +777,13 @@ fn mobile_agent_detail(entry: &AgentPanelEntry) -> String {
             entry.seen,
         ))
         .cloned()
-        .unwrap_or_else(|| super::status::state_label(entry.state, entry.seen).to_string());
+        .unwrap_or_else(|| {
+            super::status::state_label(
+                entry.state,
+                idle_age_at(app, entry.seen, entry.aged_from, now),
+            )
+            .to_string()
+        });
     parts.push(status);
     if let Some(agent_label) = entry.agent_label.as_deref() {
         parts.push(agent_label.to_string());
@@ -1028,7 +1064,7 @@ fn agent_summary_segments(
             agent_summary_text(
                 indicator_style,
                 AgentState::Blocked,
-                true,
+                IdleAge::FreshSeen,
                 Some("◉"),
                 counts.blocked,
                 "blocked",
@@ -1041,7 +1077,7 @@ fn agent_summary_segments(
             agent_summary_text(
                 indicator_style,
                 AgentState::Idle,
-                false,
+                IdleAge::FreshUnseen,
                 Some("●"),
                 counts.done,
                 "done",
@@ -1054,7 +1090,7 @@ fn agent_summary_segments(
             agent_summary_text(
                 indicator_style,
                 AgentState::Working,
-                true,
+                IdleAge::FreshSeen,
                 None,
                 counts.working,
                 "working",
@@ -1067,7 +1103,7 @@ fn agent_summary_segments(
             agent_summary_text(
                 indicator_style,
                 AgentState::Idle,
-                true,
+                IdleAge::FreshSeen,
                 None,
                 counts.idle,
                 "idle",
@@ -1081,14 +1117,14 @@ fn agent_summary_segments(
 fn agent_summary_text(
     indicator_style: StatusIndicatorStyle,
     state: AgentState,
-    seen: bool,
+    age: IdleAge,
     dot_style_symbol: Option<&str>,
     count: usize,
     label: &str,
 ) -> String {
     let symbol = match indicator_style {
         StatusIndicatorStyle::Dots => dot_style_symbol,
-        StatusIndicatorStyle::Symbols => Some(state_icon_symbol(state, seen, indicator_style)),
+        StatusIndicatorStyle::Symbols => Some(state_icon_symbol(state, age, indicator_style)),
     };
     match symbol {
         Some(symbol) => format!("{symbol} {count} {label}"),
@@ -1223,6 +1259,7 @@ mod tests {
             agent: agent_label.and_then(crate::detect::parse_agent_label),
             state: AgentState::Idle,
             seen: true,
+            aged_from: std::time::Instant::now(),
             last_agent_state_change_seq: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
@@ -1488,14 +1525,22 @@ mod tests {
     fn mobile_agent_detail_includes_tab_context_when_available() {
         let entry = agent_entry(Some("mobile-state"), Some("pi"));
 
-        assert_eq!(mobile_agent_detail(&entry), "  mobile-state · idle · pi");
+        let app = AppState::test_new();
+        assert_eq!(
+            mobile_agent_detail(&app, &entry, std::time::Instant::now()),
+            "  mobile-state · idle · pi"
+        );
     }
 
     #[test]
     fn mobile_agent_detail_keeps_existing_compact_detail_without_tab_context() {
         let entry = agent_entry(None, Some("pi"));
 
-        assert_eq!(mobile_agent_detail(&entry), "  idle · pi");
+        let app = AppState::test_new();
+        assert_eq!(
+            mobile_agent_detail(&app, &entry, std::time::Instant::now()),
+            "  idle · pi"
+        );
     }
 
     #[test]

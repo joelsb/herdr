@@ -55,6 +55,7 @@ use self::settings::render_settings_overlay;
 #[cfg(test)]
 pub(crate) use self::sidebar::workspace_drop_indicator_row;
 use self::sidebar::{render_sidebar, render_sidebar_collapsed};
+pub(crate) use self::status::idle_age_for;
 use self::status::{
     copy_feedback_rect, render_config_diagnostic, render_copy_feedback, render_toast_notification,
     toast_notification_rect,

@@ -136,6 +136,11 @@ pub struct App {
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
+    /// When the next idle pane crosses the staleness threshold.
+    ///
+    /// Presentation derives the bucket from the clock at render time, so this
+    /// only exists to wake the loop once per crossing rather than poll.
+    pub(crate) idle_age_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
@@ -635,6 +640,7 @@ impl App {
             sidebar_section_split,
             agent_panel_sort,
             status_indicators: config.ui.status_indicators,
+            idle_stale_after: std::time::Duration::from_secs(config.ui.idle_stale_after_seconds),
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
@@ -773,6 +779,7 @@ impl App {
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
+            idle_age_deadline: None,
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
@@ -1527,6 +1534,8 @@ impl App {
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
                 self.state.status_indicators = config.ui.status_indicators;
+                self.state.idle_stale_after =
+                    std::time::Duration::from_secs(config.ui.idle_stale_after_seconds);
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
                 self.state.agent_panel_scroll = 0;
