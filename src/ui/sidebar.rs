@@ -18,8 +18,19 @@ use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
 use crate::workspace::AggregateStatus;
 
+/// Section divider row plus the ` spaces` label; the spaces section sits below
+/// the agents section, so it owns the divider row.
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
-const AGENT_PANEL_HEADER_ROWS: u16 = 3;
+/// The ` agents` label plus one blank row; the agents section sits at the top of
+/// the sidebar and has no divider row above it.
+const AGENT_PANEL_HEADER_ROWS: u16 = 2;
+
+/// Metadata token an orchestrating agent reports on a pane it spawned, holding
+/// the public pane id of the pane that spawned it (`herdr pane report-metadata
+/// <child> --source <id> --token parent_pane=<parent pane id>`). It is a plain
+/// metadata token rather than pane state so the hierarchy needs no wire or
+/// persistence change; a pane whose parent is gone simply renders top level.
+pub(crate) const SUBAGENT_PARENT_TOKEN: &str = "parent_pane";
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -40,34 +51,41 @@ pub(crate) struct AgentPanelEntry {
     pub last_agent_state_change_seq: Option<u64>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
+    /// This pane reported a parent that is also in the panel, so it renders as a
+    /// child row. See [`nest_subagent_entries`].
+    pub nested: bool,
 }
 
+/// Heights of the two expanded sidebar sections, top first. `split_ratio` is the
+/// share taken by the top (agents) section.
 fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
     if total_h == 0 {
         return (0, 0);
     }
 
     if total_h < 6 {
-        let ws_h = total_h.div_ceil(2);
-        return (ws_h, total_h.saturating_sub(ws_h));
+        let top_h = total_h.div_ceil(2);
+        return (top_h, total_h.saturating_sub(top_h));
     }
 
     let ratio = split_ratio.clamp(0.1, 0.9);
-    let ws_h = ((total_h as f32) * ratio).round() as u16;
-    let ws_h = ws_h.clamp(3, total_h.saturating_sub(3));
-    let detail_h = total_h.saturating_sub(ws_h);
-    (ws_h, detail_h)
+    let top_h = ((total_h as f32) * ratio).round() as u16;
+    let top_h = top_h.clamp(3, total_h.saturating_sub(3));
+    let bottom_h = total_h.saturating_sub(top_h);
+    (top_h, bottom_h)
 }
 
+/// Agents on top, spaces below. Returned as `(spaces, agents)` because callers
+/// address the sections by role, not by position.
 pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.width == 0 || content.height == 0 {
         return (Rect::default(), Rect::default());
     }
 
-    let (ws_h, detail_h) = sidebar_section_heights(content.height, split_ratio);
-    let ws_area = Rect::new(content.x, content.y, content.width, ws_h);
-    let detail_area = Rect::new(content.x, content.y + ws_h, content.width, detail_h);
+    let (detail_h, ws_h) = sidebar_section_heights(content.height, split_ratio);
+    let detail_area = Rect::new(content.x, content.y, content.width, detail_h);
+    let ws_area = Rect::new(content.x, content.y + detail_h, content.width, ws_h);
     (ws_area, detail_area)
 }
 
@@ -77,8 +95,8 @@ pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect
         return Rect::default();
     }
 
-    let (ws_h, _) = sidebar_section_heights(content.height, split_ratio);
-    Rect::new(content.x, content.y + ws_h, content.width, 1)
+    let (detail_h, _) = sidebar_section_heights(content.height, split_ratio);
+    Rect::new(content.x, content.y + detail_h, content.width, 1)
 }
 
 fn agent_panel_sort_label(sort: AgentPanelSort) -> &'static str {
@@ -93,17 +111,12 @@ pub(crate) fn agent_panel_toggle_rect(area: Rect, sort: AgentPanelSort) -> Rect 
 }
 
 fn agent_panel_header_label_rect(area: Rect, label: &str) -> Rect {
-    if area.width == 0 || area.height < 2 {
+    if area.width == 0 || area.height == 0 {
         return Rect::default();
     }
 
     let width = display_width_u16(label).min(area.width);
-    Rect::new(
-        area.x + area.width.saturating_sub(width),
-        area.y + 1,
-        width,
-        1,
-    )
+    Rect::new(area.x + area.width.saturating_sub(width), area.y, width, 1)
 }
 
 fn active_agent_view_label(app: &AppState) -> Option<&str> {
@@ -133,7 +146,89 @@ fn agent_panel_entries_with_runtimes(
 ) -> Vec<AgentPanelEntry> {
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
     crate::app::agent_view::apply_agent_view(app, &mut entries);
+    nest_subagent_entries(app, &mut entries);
     entries
+}
+
+fn entry_public_pane_id(app: &AppState, entry: &AgentPanelEntry) -> Option<String> {
+    let ws = app.workspaces.get(entry.ws_idx)?;
+    let number = ws.public_pane_number(entry.pane_id)?;
+    Some(crate::workspace::public_pane_id_for_number(&ws.id, number))
+}
+
+/// Reorders entries so every pane that reported a [`SUBAGENT_PARENT_TOKEN`]
+/// pointing at another entry follows that entry and renders indented. Children
+/// keep their incoming relative order, descendants are flattened to one indent
+/// level, and a token naming a pane that is filtered out or gone leaves the
+/// entry where it was.
+fn nest_subagent_entries(app: &AppState, entries: &mut Vec<AgentPanelEntry>) {
+    if !entries
+        .iter()
+        .any(|entry| entry.tokens.contains_key(SUBAGENT_PARENT_TOKEN))
+    {
+        return;
+    }
+
+    let index_by_pane_id = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| Some((entry_public_pane_id(app, entry)?, index)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let parent_of = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            entry
+                .tokens
+                .get(SUBAGENT_PARENT_TOKEN)
+                .and_then(|parent| index_by_pane_id.get(parent).copied())
+                .filter(|parent| *parent != index)
+        })
+        .collect::<Vec<_>>();
+    if parent_of.iter().all(Option::is_none) {
+        return;
+    }
+
+    let mut children = vec![Vec::new(); entries.len()];
+    for (index, parent) in parent_of.iter().enumerate() {
+        if let Some(parent) = parent {
+            children[*parent].push(index);
+        }
+    }
+
+    let mut order = Vec::with_capacity(entries.len());
+    let mut placed = vec![false; entries.len()];
+    let mut stack = Vec::new();
+    for root in 0..entries.len() {
+        if parent_of[root].is_some() || placed[root] {
+            continue;
+        }
+        placed[root] = true;
+        order.push((root, false));
+        stack.extend(children[root].iter().rev().copied());
+        while let Some(child) = stack.pop() {
+            if placed[child] {
+                continue;
+            }
+            placed[child] = true;
+            order.push((child, true));
+            stack.extend(children[child].iter().rev().copied());
+        }
+    }
+    // Parent cycles never get a root, so keep those entries in their own order.
+    order.extend(
+        (0..entries.len())
+            .filter(|index| !placed[*index])
+            .map(|index| (index, false)),
+    );
+
+    let mut slots = entries.drain(..).map(Some).collect::<Vec<_>>();
+    entries.extend(order.into_iter().filter_map(|(index, nested)| {
+        slots[index].take().map(|mut entry| {
+            entry.nested = nested;
+            entry
+        })
+    }));
 }
 
 fn collect_agent_panel_entries_with_runtimes(
@@ -181,6 +276,7 @@ fn collect_agent_panel_entries_with_runtimes(
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         state_labels: detail.state_labels,
                         tokens: detail.tokens,
+                        nested: false,
                     }
                 })
         })
@@ -1266,13 +1362,22 @@ fn render_workspace_list(
     };
 
     let list_bottom = area.y + area.height.saturating_sub(1);
+    if area.height > 1 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "─".repeat(area.width as usize),
+                Style::default().fg(p.surface_dim),
+            )),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+    }
     if area.height > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " spaces",
                 Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
             )])),
-            Rect::new(area.x, area.y, area.width, 1),
+            Rect::new(area.x, area.y + u16::from(area.height > 1), area.width, 1),
         );
     }
 
@@ -1481,18 +1586,12 @@ fn render_agent_detail(
         return;
     }
 
-    let sep_line = "─".repeat(area.width as usize);
-    frame.render_widget(
-        Paragraph::new(Span::styled(&sep_line, Style::default().fg(p.surface_dim))),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " agents",
             Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
         )])),
-        Rect::new(area.x, area.y + 1, area.width, 1),
+        Rect::new(area.x, area.y, area.width, 1),
     );
     let control_label = active_agent_view_label(app)
         .unwrap_or_else(|| agent_panel_sort_label(app.agent_panel_sort));
@@ -1560,8 +1659,32 @@ fn render_agent_detail(
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
         let state_icon = state_icon(detail.state, detail_age, app.status_indicators, p);
 
+        let is_last_child = detail.nested && details.get(index + 1).is_none_or(|next| !next.nested);
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
-            let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
+            let mut spans = Vec::new();
+            let prefix_width = if detail.nested {
+                spans.push(Span::raw("   "));
+                if row_index == 0 {
+                    spans.push(Span::styled(
+                        if is_last_child { "└─ " } else { "├─ " },
+                        Style::default().fg(p.overlay0),
+                    ));
+                    6
+                } else if is_last_child {
+                    spans.push(Span::raw("     "));
+                    8
+                } else {
+                    spans.push(Span::styled("│", Style::default().fg(p.overlay0)));
+                    spans.push(Span::raw("    "));
+                    8
+                }
+            } else if row_index == 0 {
+                spans.push(Span::raw(" "));
+                1
+            } else {
+                spans.push(Span::raw("   "));
+                3
+            };
             spans.extend(resolved_token_spans(
                 resolved,
                 state_icon,
@@ -1570,8 +1693,7 @@ fn render_agent_detail(
                 agent_style,
                 agent_style,
                 p,
-                body.width
-                    .saturating_sub(if row_index == 0 { 1 } else { 3 }) as usize,
+                body.width.saturating_sub(prefix_width) as usize,
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).style(row_style),
@@ -1689,6 +1811,137 @@ mod tests {
             .content
             .iter()
             .all(|cell| cell.bg == app.palette.sidebar_bg));
+    }
+
+    /// Workspace with one orchestrator pane and two panes it "spawned", wired
+    /// the way `herdr pane report-metadata --token parent_pane=<id>` wires them.
+    fn app_with_two_subagent_panes() -> (crate::app::state::AppState, Vec<crate::layout::PaneId>) {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut workspace = Workspace::test_new("orchestration");
+        let parent = workspace.tabs[0].root_pane;
+        let first_child = workspace.test_split(Direction::Horizontal);
+        let second_child = workspace.test_split(Direction::Horizontal);
+        let parent_public_id = crate::workspace::public_pane_id_for_number(
+            &workspace.id,
+            workspace.public_pane_number(parent).expect("parent number"),
+        );
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+
+        let parent_terminal_id = app.workspaces[0].tabs[0].panes[&parent]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&parent_terminal_id)
+            .unwrap()
+            .detected_agent = Some(Agent::Pi);
+
+        for (pane_id, label) in [(first_child, "solo-athena"), (second_child, "solo-mautic")] {
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Pi);
+            terminal.manual_label = Some(label.to_string());
+            terminal.metadata_tokens.patch(
+                std::collections::HashMap::from([(
+                    SUBAGENT_PARENT_TOKEN.to_string(),
+                    Some(parent_public_id.clone()),
+                )]),
+                None,
+                std::time::Instant::now(),
+            );
+        }
+
+        (app, vec![parent, first_child, second_child])
+    }
+
+    #[test]
+    fn reported_subagent_panes_follow_their_parent_and_are_marked_nested() {
+        let (app, panes) = app_with_two_subagent_panes();
+
+        let entries = agent_panel_entries(&app);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.pane_id, entry.nested))
+                .collect::<Vec<_>>(),
+            vec![(panes[0], false), (panes[1], true), (panes[2], true),]
+        );
+    }
+
+    #[test]
+    fn subagent_rows_render_indented_under_the_parent_row() {
+        let (app, _) = app_with_two_subagent_panes();
+        let area = Rect::new(0, 0, 26, 30);
+        let mut terminal = Terminal::new(TestBackend::new(26, 30)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+
+        let rendered = (0..8)
+            .map(|offset| row_text(buffer, body.y + offset, 25))
+            .collect::<Vec<_>>();
+
+        assert!(rendered[0].contains("orchestration"), "{rendered:#?}");
+        let athena = rendered
+            .iter()
+            .position(|row| row.contains("solo-athena"))
+            .unwrap_or_else(|| panic!("{rendered:#?}"));
+        let mautic = rendered
+            .iter()
+            .position(|row| row.contains("solo-mautic"))
+            .unwrap_or_else(|| panic!("{rendered:#?}"));
+        assert!(athena > 0 && mautic > athena, "{rendered:#?}");
+        assert!(rendered[athena].starts_with("   ├─ "), "{rendered:#?}");
+        assert!(rendered[mautic].starts_with("   └─ "), "{rendered:#?}");
+        // The continuation row of a non-last child carries the tree line.
+        assert!(
+            rendered[athena + 1].starts_with("   │    "),
+            "{rendered:#?}"
+        );
+        assert!(
+            rendered[mautic + 1].starts_with("        "),
+            "{rendered:#?}"
+        );
+    }
+
+    #[test]
+    fn a_parent_token_naming_an_unknown_pane_keeps_the_incoming_order() {
+        let (mut app, panes) = app_with_two_subagent_panes();
+        for pane_id in [panes[1], panes[2]] {
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .metadata_tokens
+                .patch(
+                    std::collections::HashMap::from([(
+                        SUBAGENT_PARENT_TOKEN.to_string(),
+                        Some("wZZ:p9".to_string()),
+                    )]),
+                    None,
+                    std::time::Instant::now(),
+                );
+        }
+
+        let entries = agent_panel_entries(&app);
+
+        assert!(entries.iter().all(|entry| !entry.nested));
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.pane_id)
+                .collect::<Vec<_>>(),
+            panes
+        );
     }
 
     #[test]
@@ -2675,8 +2928,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     fn expanded_sidebar_sections_handle_tiny_heights() {
         let (ws_area, detail_area) = expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9);
 
-        assert_eq!(ws_area, Rect::new(0, 0, 19, 3));
-        assert_eq!(detail_area, Rect::new(0, 3, 19, 2));
+        assert_eq!(detail_area, Rect::new(0, 0, 19, 3));
+        assert_eq!(ws_area, Rect::new(0, 3, 19, 2));
     }
 
     #[test]

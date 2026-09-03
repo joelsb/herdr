@@ -53,9 +53,20 @@ pub(super) fn agent_rows(
                         AgentSidebarToken::StateText => {
                             Some(ResolvedTokenKind::StateText(state_text.to_string()))
                         }
+                        // A child row sits under its parent, so the shared
+                        // workspace and tab add nothing: name the pane instead.
+                        AgentSidebarToken::Workspace if entry.nested => {
+                            Some(ResolvedTokenKind::Workspace(
+                                entry
+                                    .pane_label
+                                    .clone()
+                                    .unwrap_or_else(|| entry.primary_label.clone()),
+                            ))
+                        }
                         AgentSidebarToken::Workspace => {
                             Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
                         }
+                        AgentSidebarToken::Tab if entry.nested => None,
                         AgentSidebarToken::Tab => {
                             entry.primary_tab_label.clone().map(ResolvedTokenKind::Tab)
                         }
@@ -176,7 +187,36 @@ mod tests {
             last_agent_state_change_seq: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
+            nested: false,
         }
+    }
+
+    #[test]
+    fn child_rows_name_the_pane_instead_of_the_shared_workspace_and_tab() {
+        let mut child = entry();
+        child.nested = true;
+        child.pane_label = Some("solo-athena".into());
+        child.primary_tab_label = Some("main".into());
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![AgentSidebarToken::Workspace, AgentSidebarToken::Tab]],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            agent_rows(&config, &child, "working"),
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
+                "solo-athena".into()
+            ))]]
+        );
+
+        child.nested = false;
+        assert_eq!(
+            agent_rows(&config, &child, "working"),
+            vec![vec![
+                ResolvedToken::unstyled(ResolvedTokenKind::Workspace("repo".into())),
+                ResolvedToken::unstyled(ResolvedTokenKind::Tab("main".into())),
+            ]]
+        );
     }
 
     #[test]

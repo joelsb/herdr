@@ -192,7 +192,9 @@ impl AppState {
             6
         }
         .min(footer.width.max(1));
-        let x = footer.x + footer.width.saturating_sub(width);
+        // The spaces section is the bottom sidebar section, so its footer shares a
+        // row with the collapse toggle at `width - 2`; keep that column free.
+        let x = footer.x + footer.width.saturating_sub(width).saturating_sub(1);
         Rect::new(x, footer.y, width, footer.height)
     }
 
@@ -729,7 +731,12 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 16));
+        let body = crate::ui::agent_panel_body_rect(app.state.agent_panel_rect(), false);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            2,
+            body.y + 2,
+        ));
 
         assert_eq!(app.state.workspaces[0].active_tab, 1);
         assert_eq!(
@@ -898,14 +905,11 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            app.state.view.sidebar_rect,
-            app.state.sidebar_section_split,
-        );
+        let body = crate::ui::agent_panel_body_rect(app.state.agent_panel_rect(), false);
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            detail_area.x + 2,
-            detail_area.y + 6,
+            body.x + 2,
+            body.y + 2,
         ));
 
         assert_eq!(app.state.active, Some(1));
@@ -928,6 +932,7 @@ mod tests {
             ("logs", Agent::Claude),
             ("review", Agent::Codex),
             ("ops", Agent::Gemini),
+            ("build", Agent::Cursor),
         ] {
             let tab_idx = ws.test_add_tab(Some(tab_name));
             let pane_id = ws.tabs[tab_idx].root_pane;
@@ -1581,21 +1586,22 @@ mod tests {
             .cwd = second_repo.clone();
         app.state.sidebar_spaces.row_gap = 1;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let spaces_y = app.state.workspace_list_rect().y;
 
         assert_eq!(
-            app.state.workspace_drop_target_at_row(0),
+            app.state.workspace_drop_target_at_row(spaces_y),
             Some(crate::app::state::WorkspaceDropTarget::Before(0))
         );
         assert_eq!(
-            app.state.workspace_drop_target_at_row(1),
+            app.state.workspace_drop_target_at_row(spaces_y + 1),
             Some(crate::app::state::WorkspaceDropTarget::Before(0))
         );
         assert_eq!(
-            app.state.workspace_drop_target_at_row(2),
+            app.state.workspace_drop_target_at_row(spaces_y + 2),
             Some(crate::app::state::WorkspaceDropTarget::Before(0))
         );
         assert_eq!(
-            app.state.workspace_drop_target_at_row(3),
+            app.state.workspace_drop_target_at_row(spaces_y + 3),
             Some(crate::app::state::WorkspaceDropTarget::Before(1))
         );
 

@@ -1263,6 +1263,7 @@ mod tests {
             last_agent_state_change_seq: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
+            nested: false,
         }
     }
 
