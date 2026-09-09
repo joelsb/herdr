@@ -336,7 +336,14 @@ pub(super) fn render_expanded(
         super::scroll::render_list_scrollbar(buffer, track, metrics, palette);
     }
 
-    let footer_y = workspace_area.bottom().saturating_sub(1);
+    // See the matching comment in `sidebar.rs`: the workspace footer used to
+    // sit safely above the sidebar's fixed collapse-toggle glyph because the
+    // workspace section was on top; now that it is the bottom section, reserve
+    // that toggle's row.
+    let footer_y = workspace_area
+        .bottom()
+        .saturating_sub(1)
+        .min(area.bottom().saturating_sub(2));
     if config.mouse_capture {
         let label = format!(" new · {}", active_endpoint_label(state));
         hits.new_workspace = Rect::new(

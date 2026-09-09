@@ -2777,7 +2777,6 @@ mod tests {
     ) -> (AppState, PaneId, crate::terminal::TerminalId) {
         let mut state = app_with_workspaces(&["a"]);
         state.idle_stale_after = std::time::Duration::from_secs(300);
-        state.local_sound_playback = true;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
         let terminal_id = state.workspaces[0].panes[&pane_id]
             .attached_terminal_id

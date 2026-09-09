@@ -1,7 +1,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
@@ -9,7 +9,8 @@ use ratatui::{
 use super::widgets::panel_contrast_fg;
 use crate::{
     app::state::{CopyFeedback, Palette},
-    config::ToastClipboardPosition,
+    config::{StatusIndicatorStyle, ToastClipboardPosition},
+    detect::AgentState,
 };
 
 pub(crate) fn copy_feedback_rect(
@@ -159,6 +160,13 @@ impl IdleAge {
 /// `aged_from` is whichever clock applies, chosen by the server side; this only
 /// measures it. Takes a caller-supplied `now` so a whole frame classifies
 /// against one instant instead of re-reading the clock per pane.
+///
+/// Not yet called from production code: rendering moved client-side in v0.9.0
+/// and the wire protocol (`ClientShellAgent`) has no elapsed-time field yet to
+/// drive this from there (see `.local/PORT-0.9.0.md`, "sidebar token/staleness
+/// visualization" gap). Kept, and exercised only by the tests below, so the
+/// classification logic is ready for whoever wires up that follow-up.
+#[allow(dead_code)]
 pub(crate) fn idle_age_at(
     app: &crate::app::AppState,
     seen: bool,
@@ -192,6 +200,8 @@ pub(crate) fn idle_age_for(
     }
 }
 
+/// Pending the same client-side wiring as `idle_age_at` above.
+#[allow(dead_code)]
 pub(super) fn state_icon_symbol(
     state: AgentState,
     age: IdleAge,
@@ -215,6 +225,8 @@ pub(super) fn state_icon_symbol(
     }
 }
 
+/// Pending the same client-side wiring as `idle_age_at` above.
+#[allow(dead_code)]
 pub(super) fn state_icon(
     state: AgentState,
     age: IdleAge,
@@ -227,6 +239,8 @@ pub(super) fn state_icon(
     )
 }
 
+/// Pending the same client-side wiring as `idle_age_at` above.
+#[allow(dead_code)]
 pub(super) fn state_label(state: AgentState, age: IdleAge) -> &'static str {
     match (state, age) {
         (AgentState::Blocked, _) => "blocked",
@@ -239,6 +253,8 @@ pub(super) fn state_label(state: AgentState, age: IdleAge) -> &'static str {
     }
 }
 
+/// Pending the same client-side wiring as `idle_age_at` above.
+#[allow(dead_code)]
 pub(super) fn state_label_color(state: AgentState, age: IdleAge, p: &Palette) -> Color {
     match (state, age) {
         (AgentState::Blocked, _) => p.red,
@@ -253,14 +269,9 @@ pub(super) fn state_label_color(state: AgentState, age: IdleAge, p: &Palette) ->
 
 #[cfg(test)]
 mod tests {
+    use super::super::text::display_width;
     use super::*;
     use std::time::Duration;
-
-    fn feedback() -> CopyFeedback {
-        CopyFeedback {
-            message: "copied to clipboard".to_string(),
-        }
-    }
 
     #[test]
     fn state_icons_support_dot_and_distinct_symbol_styles() {
@@ -314,7 +325,7 @@ mod tests {
             {
                 let (actual_symbol, style) = state_icon(state, age, indicator_style, &palette);
                 assert_eq!(actual_symbol, expected_symbol);
-                assert_eq!(display_width_u16(actual_symbol), 1);
+                assert_eq!(display_width(actual_symbol), 1);
                 assert_eq!(style.fg, Some(color));
                 assert_eq!(state_label(state, age), label);
             }

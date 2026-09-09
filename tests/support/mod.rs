@@ -1,3 +1,12 @@
+// Shared helper module compiled fresh into every integration test binary in
+// `tests/` (each `mod support;` gets its own copy, since there is no library
+// target these binaries can link a common compiled copy from). Any one test
+// file only calls a subset of these helpers, so `-D warnings`'s dead_code lint
+// fires per-binary on whichever helpers that binary doesn't happen to need.
+// Pre-existing on upstream v0.9.0 (reproduces identically against its own
+// unmodified `tests/multi_client.rs`), not introduced by this port.
+#![allow(dead_code)]
+
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -379,6 +388,107 @@ pub fn send_client_shell_shift_enter(stream: &mut UnixStream, pane_id: &str) -> 
     payload.push(0); // does not track release
     payload.push(0); // no physical key id
     payload.push(0); // no Windows key record
+
+    stream
+        .write_all(&frame_message(&payload))
+        .map_err(|e| format!("write client shell key: {e}"))?;
+    stream
+        .flush()
+        .map_err(|e| format!("flush client shell key: {e}"))
+}
+
+/// Mirror of `crate::protocol::ClientKeyCode`, field-for-field and
+/// variant-for-variant in the same declaration order, so bincode assigns it
+/// the same discriminants. Kept local because integration tests in `tests/`
+/// have no library target to import the real type from (see the hand-rolled
+/// `CLIENT_MESSAGE_*` constants above, same reason).
+#[derive(serde::Serialize)]
+enum MirrorClientKeyCode {
+    Backspace,
+    Enter,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Tab,
+    BackTab,
+    Delete,
+    Insert,
+    Esc,
+    Char(char),
+    #[allow(dead_code)]
+    F(u8),
+    #[allow(dead_code)]
+    Null,
+}
+
+/// Mirror of `crate::protocol::ClientKeyKind`; see `MirrorClientKeyCode`.
+#[derive(serde::Serialize)]
+enum MirrorClientKeyKind {
+    Press,
+    #[allow(dead_code)]
+    Repeat,
+    #[allow(dead_code)]
+    Release,
+}
+
+/// Mirror of the `Key` variant of `crate::protocol::ClientPaneInputEvent`; see
+/// `MirrorClientKeyCode`. `Key` is declared first in the real enum, so this
+/// single-variant mirror gets the same discriminant (0) without needing to
+/// also mirror `TextCommit`/`Mouse`/`Paste`, none of which this helper sends.
+#[derive(serde::Serialize)]
+enum MirrorClientPaneInputEvent {
+    Key {
+        code: MirrorClientKeyCode,
+        modifiers: u8,
+        kind: MirrorClientKeyKind,
+        repeat_count: u16,
+        shifted_codepoint: Option<u32>,
+        generated_text: Option<String>,
+        tracks_release: bool,
+        physical_key_id: Option<u32>,
+        windows_record: Option<()>,
+    },
+}
+
+/// Send one key press to a pane through the client-owned shell socket,
+/// exercising the same `ClientShellPaneInput` path real client keystrokes take
+/// (unlike the server API socket's `pane.send_input`, which bypasses client-side
+/// key dispatch entirely and so cannot exercise a client-only keybinding such as
+/// `close_pane_if_idle`).
+///
+/// The outer envelope (message tag, `pane_id` string) is hand-encoded exactly
+/// like `send_client_shell_shift_enter` above; the `events: Vec<..>` payload is
+/// encoded with the real `bincode::serde` encoder against the mirror types
+/// above, so the tricky parts (`char`, `Option<T>`) can't be hand-derived wrong.
+pub fn send_client_shell_key(
+    stream: &mut UnixStream,
+    pane_id: &str,
+    ch: char,
+    modifiers: u8,
+) -> Result<(), String> {
+    let mut payload = encode_varint_u32(CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT);
+    payload.extend_from_slice(&encode_varint_u32(pane_id.len() as u32));
+    payload.extend_from_slice(pane_id.as_bytes());
+
+    let events = vec![MirrorClientPaneInputEvent::Key {
+        code: MirrorClientKeyCode::Char(ch),
+        modifiers,
+        kind: MirrorClientKeyKind::Press,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: false,
+        physical_key_id: None,
+        windows_record: None,
+    }];
+    let encoded_events = bincode::serde::encode_to_vec(&events, bincode::config::standard())
+        .map_err(|e| format!("encode pane input events: {e}"))?;
+    payload.extend_from_slice(&encoded_events);
 
     stream
         .write_all(&frame_message(&payload))

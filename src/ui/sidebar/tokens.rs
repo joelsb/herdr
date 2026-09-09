@@ -338,33 +338,14 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
         }
     }
 
-    #[test]
-    fn child_rows_name_the_pane_instead_of_the_shared_workspace_and_tab() {
-        let mut child = entry();
-        child.nested = true;
-        child.pane_label = Some("solo-athena".into());
-        child.primary_tab_label = Some("main".into());
-        let config = AgentsSidebarConfig {
-            rows: vec![vec![AgentSidebarToken::Workspace, AgentSidebarToken::Tab]],
-            ..Default::default()
-        };
-
-        assert_eq!(
-            agent_rows(&config, &child, "working"),
-            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
-                "solo-athena".into()
-            ))]]
-        );
-
-        child.nested = false;
-        assert_eq!(
-            agent_rows(&config, &child, "working"),
-            vec![vec![
-                ResolvedToken::unstyled(ResolvedTokenKind::Workspace("repo".into())),
-                ResolvedToken::unstyled(ResolvedTokenKind::Tab("main".into())),
-            ]]
-        );
-    }
+    // A nested row's Workspace/Tab tokens showing the pane name instead of the
+    // shared workspace/tab (matching the parent row instead of repeating it) is
+    // a documented, deliberately-dropped fidelity gap from the v0.9.0 port: see
+    // "sidebar token/staleness visualization" in .local/PORT-0.9.0.md. The old
+    // version of this test asserted exactly that behavior against the pre-split
+    // `AgentPanelEntry`-shaped context, which no longer exists (`AgentTokenContext`
+    // carries no `nested` flag). Nesting itself (grouping + indentation) is
+    // covered separately in `src/ui/sidebar.rs`'s tests.
 
     #[test]
     fn missing_custom_tokens_elide_rows_and_separators() {

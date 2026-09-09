@@ -31,6 +31,11 @@ pub(crate) struct AgentPanelEntry {
     pub state: AgentState,
     pub seen: bool,
     /// Timestamp this entry's staleness is measured from; see PaneDetail.
+    ///
+    /// Not yet read anywhere: no production caller wires this into the
+    /// stale/parked visualization yet (see `.local/PORT-0.9.0.md`). Kept
+    /// populated so that follow-up only needs to consume it, not re-plumb it.
+    #[allow(dead_code)]
     pub aged_from: std::time::Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub tokens: std::collections::HashMap<String, String>,
