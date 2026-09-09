@@ -80,7 +80,7 @@ impl App {
         self.state
             .focus_pane_in_workspace(resolved.ws_idx, resolved.pane_id);
         self.state.mark_active_tab_seen();
-        self.state.settle_terminal_mode_after_focus();
+        self.state.mode = crate::app::Mode::Terminal;
         self.agent_info(resolved.ws_idx, resolved.pane_id)
             .ok_or_else(|| TerminalTargetError::NotFound {
                 target: target.to_string(),
@@ -160,6 +160,8 @@ impl App {
         {
             return Err(AgentStartError::InvalidArgument);
         }
+        let persisted_agent_session =
+            crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
         let conflicts = self.agent_name_conflicts(&name, "");
         if !conflicts.is_empty() {
             return Err(AgentStartError::DuplicateName {
@@ -216,6 +218,9 @@ impl App {
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
+        }
+        if let Some(session) = persisted_agent_session {
+            terminal.set_managed_agent_launch_session(session);
         }
         self.state.mark_session_dirty();
         self.schedule_session_save();
@@ -416,14 +421,6 @@ fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<St
         return Some("sh".into());
     }
     crate::platform::available_pane_shell(runtime.child_pid()?)
-}
-
-/// Whether the pane's foreground job is nothing but the pane's own shell.
-///
-/// This is the same "pane is free" signal `agent.start` gates on, reused so the
-/// idle-close keybinding cannot disagree with it about whether a pane is busy.
-pub(crate) fn pane_is_at_bare_shell(runtime: &crate::terminal::TerminalRuntime) -> bool {
-    available_shell_name(runtime).is_some()
 }
 
 pub(super) fn runtime_hosts_agent(
