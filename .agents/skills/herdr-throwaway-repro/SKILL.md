@@ -54,6 +54,7 @@ Run the named session inside the new outer pane. Clear inherited session selecti
 
 ```bash
 env \
+  -u HERDR_ENV \
   -u HERDR_SOCKET_PATH \
   -u HERDR_CLIENT_SOCKET_PATH \
   -u HERDR_SESSION \
@@ -62,6 +63,8 @@ env \
   -u HERDR_PANE_ID \
   herdr --session <session-name>
 ```
+
+`-u HERDR_ENV` is required, not optional. Without it the nested session exits immediately with `error: nested herdr is disabled by default.` and a Jurassic Park quote, because `should_block_nested_for_env` (`src/main.rs`) blocks whenever `experimental.allow_nested` is false and the inherited `HERDR_ENV` is `1`. Clearing the variable satisfies the gate per-launch; do NOT set `experimental.allow_nested` in the shared config to get past it. Verified 2026-09-09 against herdr 0.9.0, where the documented command without `-u HERDR_ENV` produced exactly that error and no session.
 
 Add reproduction-specific environment variables to this launch command when needed. Environment variables that configure the server must be present before the named server starts.
 
