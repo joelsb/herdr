@@ -15,9 +15,88 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    /// Renders indented under the row above it. See [`nested_agent_pane_ids`].
+    pub(super) nested: bool,
+    /// Last child of its parent, so it draws the closing tree corner.
+    pub(super) last_child: bool,
 }
 
 pub(super) fn ordered_agent_pane_ids(
+    snapshot: &ClientShellSnapshot,
+    sort: crate::config::AgentPanelSortConfig,
+) -> Vec<String> {
+    nested_agent_pane_ids(snapshot, sort)
+        .into_iter()
+        .map(|(pane_id, _)| pane_id)
+        .collect()
+}
+
+/// Display order as `(pane id, is child row)`. An agent that reported a
+/// [`crate::ui::SUBAGENT_PARENT_TOKEN`] naming another listed agent follows that
+/// agent and renders indented; descendants flatten to one indent level, and a
+/// parent that is gone or filtered out leaves the row flat.
+///
+/// The hierarchy is derived here rather than sent by the server because it is
+/// presentation: the token is already in the snapshot, so nesting needs no wire
+/// or protocol change.
+pub(super) fn nested_agent_pane_ids(
+    snapshot: &ClientShellSnapshot,
+    sort: crate::config::AgentPanelSortConfig,
+) -> Vec<(String, bool)> {
+    let flat = flat_agent_pane_ids(snapshot, sort);
+    // ponytail: linear scans per row; the panel holds panes, not records.
+    let parent_of = flat
+        .iter()
+        .map(|pane_id| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| &agent.pane_id == pane_id)
+                .and_then(|agent| {
+                    agent
+                        .tokens
+                        .iter()
+                        .find(|(key, _)| key == crate::ui::SUBAGENT_PARENT_TOKEN)
+                })
+                .map(|(_, parent)| parent.clone())
+                .filter(|parent| parent != pane_id && flat.contains(parent))
+        })
+        .collect::<Vec<_>>();
+    if parent_of.iter().all(Option::is_none) {
+        return flat.into_iter().map(|pane_id| (pane_id, false)).collect();
+    }
+
+    let mut placed = vec![false; flat.len()];
+    let mut order = Vec::with_capacity(flat.len());
+    for root in 0..flat.len() {
+        if parent_of[root].is_some() || placed[root] {
+            continue;
+        }
+        placed[root] = true;
+        order.push((flat[root].clone(), false));
+        let mut frontier = vec![flat[root].clone()];
+        while let Some(parent) = frontier.pop() {
+            for index in 0..flat.len() {
+                if placed[index] || parent_of[index].as_ref() != Some(&parent) {
+                    continue;
+                }
+                placed[index] = true;
+                order.push((flat[index].clone(), true));
+                frontier.push(flat[index].clone());
+            }
+        }
+    }
+    // A parent cycle never reaches a root, so keep those rows in their own order.
+    order.extend(
+        flat.into_iter()
+            .enumerate()
+            .filter(|(index, _)| !placed[*index])
+            .map(|(_, pane_id)| (pane_id, false)),
+    );
+    order
+}
+
+fn flat_agent_pane_ids(
     snapshot: &ClientShellSnapshot,
     sort: crate::config::AgentPanelSortConfig,
 ) -> Vec<String> {
@@ -239,9 +318,9 @@ pub(super) fn agent_rows(
     config: &ClientShellConfig,
     machine: Option<&str>,
 ) -> Vec<AgentRow> {
-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
+    let mut rows = nested_agent_pane_ids(snapshot, config.agent_panel_sort)
         .into_iter()
-        .filter_map(|pane_id| {
+        .filter_map(|(pane_id, nested)| {
             let agent = snapshot
                 .agents
                 .iter()
@@ -286,6 +365,7 @@ pub(super) fn agent_rows(
             let rows = crate::ui::sidebar_agent_rows(
                 &config.agents,
                 crate::ui::AgentTokenContext {
+                    nested,
                     machine,
                     workspace: &workspace.label,
                     tab: tab_label,
@@ -306,9 +386,16 @@ pub(super) fn agent_rows(
                 status: agent.agent_status,
                 focused: agent.focused,
                 rows,
+                nested,
+                last_child: false,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for index in 0..rows.len() {
+        rows[index].last_child =
+            rows[index].nested && rows.get(index + 1).is_none_or(|next| !next.nested);
+    }
+    rows
 }
 
 pub(super) fn render_agent_row(
@@ -355,8 +442,31 @@ pub(super) fn render_agent_row(
         row.rows.clone()
     };
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
-        let indent = if index == 0 { 1 } else { 3 };
-        let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
+        let mut spans = Vec::new();
+        let indent = if row.nested {
+            spans.push(ratatui::text::Span::raw("   "));
+            if index == 0 {
+                spans.push(ratatui::text::Span::styled(
+                    if row.last_child { "└─ " } else { "├─ " },
+                    Style::default().fg(palette.overlay0),
+                ));
+                6
+            } else if row.last_child {
+                spans.push(ratatui::text::Span::raw("     "));
+                8
+            } else {
+                spans.push(ratatui::text::Span::styled(
+                    "│",
+                    Style::default().fg(palette.overlay0),
+                ));
+                spans.push(ratatui::text::Span::raw("    "));
+                8
+            }
+        } else {
+            let indent = if index == 0 { 1 } else { 3 };
+            spans.push(ratatui::text::Span::raw(" ".repeat(indent)));
+            indent
+        };
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
             icon,

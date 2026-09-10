@@ -1285,3 +1285,79 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
 }
+
+/// A pane that reports `parent_pane` follows that pane and renders under it, so
+/// an orchestrator's subagent panes read as its children instead of siblings.
+#[test]
+fn reported_subagent_panes_render_indented_under_their_parent() {
+    let mut projected = snapshot();
+    for pane_id in ["pane_2", "pane_3"] {
+        let mut pane = projected.panes[0].clone();
+        pane.pane_id = pane_id.into();
+        pane.focused = false;
+        projected.panes.push(pane);
+    }
+    let agent = |pane_id: &str, name: &str, seq: u64, parent: Option<&str>| ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some(name.into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Idle,
+        state_change_seq: seq,
+        state_labels: Vec::new(),
+        tokens: parent
+            .map(|parent| vec![("parent_pane".into(), parent.into())])
+            .unwrap_or_default(),
+        focused: pane_id == "pane_1",
+    };
+    // The children sort ahead of the parent on their own, so a passing run
+    // proves the nesting pass reordered them rather than the sort agreeing.
+    projected.agents = vec![
+        agent("pane_3", "child-b", 50, Some("pane_1")),
+        agent("pane_1", "parent", 30, None),
+        agent("pane_2", "child-a", 40, Some("pane_1")),
+    ];
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let lines = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let row_of = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} missing from {lines:#?}"))
+    };
+    let parent = row_of("parent");
+    assert_eq!(row_of("├─ child-b"), parent + 1, "{lines:#?}");
+    assert_eq!(row_of("└─ child-a"), parent + 2, "{lines:#?}");
+    assert!(lines[parent + 1].starts_with("   ├─ "), "{lines:#?}");
+
+    // The hit map follows the rendered order, so a click lands on the child.
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pane_1", "pane_3", "pane_2"]
+    );
+}

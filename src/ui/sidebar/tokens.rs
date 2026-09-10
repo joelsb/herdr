@@ -62,6 +62,9 @@ pub(crate) struct AgentTokenContext<'a> {
     pub(crate) terminal_title_stripped: Option<&'a str>,
     pub(crate) canonical_agent: Option<crate::detect::Agent>,
     pub(crate) tokens: &'a std::collections::HashMap<String, String>,
+    /// This row renders indented under its parent row, so the workspace and tab
+    /// it shares with that parent add nothing.
+    pub(crate) nested: bool,
 }
 
 pub(crate) fn agent_rows(
@@ -85,9 +88,17 @@ pub(crate) fn agent_rows(
                         AgentSidebarToken::Machine => context
                             .machine
                             .map(|value| ResolvedTokenKind::Machine(value.to_string())),
+                        // A child row sits under its parent, so the shared
+                        // workspace and tab add nothing: name the pane instead.
+                        AgentSidebarToken::Workspace if context.nested => {
+                            Some(ResolvedTokenKind::Workspace(
+                                context.pane.unwrap_or(context.workspace).to_string(),
+                            ))
+                        }
                         AgentSidebarToken::Workspace => {
                             Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
                         }
+                        AgentSidebarToken::Tab if context.nested => None,
                         AgentSidebarToken::Tab => context
                             .tab
                             .map(|value| ResolvedTokenKind::Tab(value.to_string())),
@@ -201,6 +212,7 @@ mod tests {
         terminal_title_stripped: Option<String>,
         canonical_agent: Option<crate::detect::Agent>,
         tokens: std::collections::HashMap<String, String>,
+        nested: bool,
     }
 
     fn entry() -> Entry {
@@ -213,6 +225,7 @@ mod tests {
             terminal_title_stripped: None,
             canonical_agent: Some(crate::detect::Agent::Pi),
             tokens: std::collections::HashMap::new(),
+            nested: false,
         }
     }
 
@@ -227,7 +240,36 @@ mod tests {
             terminal_title_stripped: entry.terminal_title_stripped.as_deref(),
             canonical_agent: entry.canonical_agent,
             tokens: &entry.tokens,
+            nested: entry.nested,
         }
+    }
+
+    #[test]
+    fn child_rows_name_the_pane_instead_of_the_shared_workspace_and_tab() {
+        let mut child = entry();
+        child.nested = true;
+        child.pane = Some("solo-athena".into());
+        child.tab = Some("main".into());
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![AgentSidebarToken::Workspace, AgentSidebarToken::Tab]],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            agent_rows(&config, context(&child), "working"),
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
+                "solo-athena".into()
+            ))]]
+        );
+
+        child.nested = false;
+        assert_eq!(
+            agent_rows(&config, context(&child), "working"),
+            vec![vec![
+                ResolvedToken::unstyled(ResolvedTokenKind::Workspace("repo".into())),
+                ResolvedToken::unstyled(ResolvedTokenKind::Tab("main".into())),
+            ]]
+        );
     }
 
     #[test]
