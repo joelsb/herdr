@@ -348,6 +348,19 @@ status_indicators = "symbols"
 
 The symbols are static, so this option does not enable spinner animation.
 
+### Idle aging
+
+An idle pane also ages, so a finished result you have not read looks different from one you have. Herdr measures two separate clocks: a pane you have not looked at ages from when its result appeared, and a pane you have looked at ages from your last look, so glancing at a pane keeps it fresh.
+
+That gives four idle presentations: **done** for a fresh unread result, **stale** once an unread result passes the threshold, **idle** for a pane you looked at recently, and **parked** for one you looked at and left alone. An unread result going stale also raises the usual needs-attention notification, once per idle episode; a pane going parked is silent, because you already chose to leave it.
+
+The threshold defaults to five minutes and can be changed in Settings under **idle aging**, or configured:
+
+```toml
+[ui]
+idle_stale_after_seconds = 300
+```
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:

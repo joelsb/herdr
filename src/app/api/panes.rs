@@ -4148,6 +4148,42 @@ mod tests {
     }
 
     #[test]
+    fn pane_info_reports_how_long_the_agent_state_has_held() {
+        let mut app = app_with_linked_worktree();
+        let pane_id = app.state.workspaces[0].tabs[0].layout.pane_ids()[0];
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+
+        let entered = std::time::Instant::now() - std::time::Duration::from_secs(42);
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state_with_screen_signals_at(
+                Some(crate::detect::Agent::Pi),
+                crate::detect::AgentState::Idle,
+                false,
+                false,
+                false,
+                false,
+                entered,
+            );
+
+        let pane = app.pane_info(0, pane_id).unwrap();
+        // Elapsed seconds, not a timestamp: a client cannot interpret another
+        // process's monotonic clock. Range rather than equality because the
+        // clock keeps moving between the report and the assertion.
+        let age = pane.state_age_seconds.expect("state age");
+        assert!(
+            (42..45).contains(&age),
+            "expected roughly 42s in state, got {age}"
+        );
+    }
+
+    #[test]
     fn api_pane_focus_rejects_invalid_pane_id() {
         let mut app = app_with_linked_worktree();
 

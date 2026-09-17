@@ -6,7 +6,7 @@
 pub(crate) mod actions;
 mod agent_resume;
 pub(crate) mod agent_view;
-mod agents;
+pub(crate) mod agents;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
 #[cfg(test)]
@@ -135,6 +135,11 @@ pub struct App {
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
+    /// When the next idle pane crosses the staleness threshold.
+    ///
+    /// Presentation derives the bucket from the clock at render time, so this
+    /// only exists to wake the loop once per crossing rather than poll.
+    pub(crate) idle_age_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
@@ -481,6 +486,7 @@ impl App {
             prefix_mods,
             headless_size: config.headless_size(),
             agent_panel_sort,
+            idle_stale_after: std::time::Duration::from_secs(config.ui.idle_stale_after_seconds),
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
@@ -596,6 +602,7 @@ impl App {
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
+            idle_age_deadline: None,
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
@@ -678,6 +685,24 @@ impl App {
                 .get(idx)
                 .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
         });
+
+        // Titles arrive on the manifest and are seeded into each imported
+        // runtime, but `sync_terminal_titles` only ever reads panes the parser
+        // has just marked dirty, and an imported pane is never dirty: its title
+        // was set by an OSC sequence the previous server consumed. Without this
+        // the seeded title stays inside the runtime and never reaches
+        // `TerminalState`, so every pane loses its sidebar name until the
+        // program inside happens to emit a new title. Publish them all once,
+        // here, while the imported set is exactly the panes that need it.
+        let imported_panes: std::collections::HashSet<crate::layout::PaneId> = app
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|ws| ws.tabs.iter())
+            .flat_map(|tab| tab.panes.keys().copied())
+            .collect();
+        app.sync_terminal_titles(&imported_panes);
+
         Ok(app)
     }
 
@@ -846,6 +871,8 @@ impl App {
                 self.configure_window_title(&config.ui.window_title);
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
+                self.state.idle_stale_after =
+                    std::time::Duration::from_secs(config.ui.idle_stale_after_seconds);
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
                 self.state.sound = config.ui.sound.clone();

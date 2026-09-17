@@ -20,6 +20,7 @@ pub(crate) const QWEN_HOME_ENV_VAR: &str = "QWEN_HOME";
 pub(crate) const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
 pub(crate) const ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR: &str = "ANTIGRAVITY_CLI_CONFIG_DIR";
 pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
+pub(crate) const JCODE_HOME_ENV_VAR: &str = "JCODE_HOME";
 /// The grok CLI's own config-home override (documented alongside
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
@@ -192,6 +193,11 @@ pub(crate) fn grok_dir() -> io::Result<PathBuf> {
     // The grok CLI honors GROK_HOME as its config home (config.toml,
     // auth.json, hooks/); mirror it so hook installs land where grok looks.
     config_dir_from_env_or_home(GROK_HOME_ENV_VAR, &[".grok"])
+}
+
+pub(crate) fn jcode_dir() -> io::Result<PathBuf> {
+    // jcode reads its config home from JCODE_HOME, falling back to ~/.jcode.
+    config_dir_from_env_or_home(JCODE_HOME_ENV_VAR, &[".jcode"])
 }
 
 pub(crate) fn home_dir() -> io::Result<PathBuf> {

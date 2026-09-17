@@ -27,6 +27,7 @@ herdr integration install cursor
 herdr integration install mastracode
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install jcode
 ```
 
 ## Uninstall integrations
@@ -49,6 +50,7 @@ herdr integration uninstall cursor
 herdr integration uninstall mastracode
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall jcode
 ```
 
 ## How Herdr uses integrations
@@ -57,7 +59,7 @@ Herdr uses integrations in two ways:
 
 | Integration type | Agents | Effect |
 | --- | --- | --- |
-| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
+| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode, Jcode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
 | Session identity | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Qwen Code, Cursor Agent CLI, Hermes Agent, Antigravity CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection. |
 
 Custom integrations can also report state that is not visible in the native terminal UI. They do not need to be built into Herdr or use a recognized agent executable.
@@ -328,6 +330,22 @@ The hook reports session identity through Grok's `SessionStart` hook while Grok 
 Herdr uses `~/.grok` by default, or `GROK_HOME` when set. The Grok config directory must already exist. Grok merges every `hooks/*.json` file in that directory, so install writes a self-contained `hooks/herdr.json` with the Herdr `SessionStart` entry next to `hooks/herdr-agent-state.sh` (`hooks/herdr-agent-state.ps1` on Windows), and never edits other hook files. Uninstall removes exactly those two Herdr-owned files.
 
 After Grok emits a session start event, Herdr can use the reported session id to resume the pane with `grok --resume <id>`.
+
+## Jcode
+
+Install the Jcode hook:
+
+```bash
+herdr integration install jcode
+```
+
+The hook reports Jcode lifecycle state and session identity to Herdr for authoritative `idle`, `working`, and `blocked` status and native restore. Jcode has no screen manifest fallback; state comes from the hook while Jcode runs inside a Herdr pane.
+
+Herdr uses `~/.jcode` by default, or `JCODE_HOME` when set. The Jcode config directory must already exist. Install writes `hooks/herdr-agent-state.sh` and adds the Herdr command to each lifecycle event in the `[hooks]` table of `config.toml`. Jcode accepts several commands per event, so install appends Herdr's command and leaves existing hook commands in place; uninstall removes only Herdr's own entries and deletes the hook script.
+
+Jcode swarm workers spawned into their own visible pane are skipped, because that pane already reports for itself.
+
+Herdr resumes stored Jcode sessions with `jcode --resume <id>`.
 
 ## Custom status labels
 

@@ -170,6 +170,22 @@ pub(super) fn render_settings_overlay(
                 &mut choice_hits,
             );
         }
+        ClientSettingsSection::IdleStale => {
+            let choices = crate::config::IDLE_STALE_CHOICES
+                .iter()
+                .map(|(label, _)| *label)
+                .collect::<Vec<_>>();
+            render_choice_section(
+                buffer,
+                content,
+                "idle aging",
+                "how long before an unread result reads as stale, or a viewed pane as parked",
+                &choices,
+                settings.selected,
+                palette,
+                &mut choice_hits,
+            );
+        }
         ClientSettingsSection::Sound => {
             render_choice_section(
                 buffer,

@@ -1447,6 +1447,7 @@ impl ClientShellState {
                         self.overlay,
                         Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
                             section: ClientSettingsSection::Indicators
+                                | ClientSettingsSection::IdleStale
                                 | ClientSettingsSection::Sound
                                 | ClientSettingsSection::Toast,
                             ..

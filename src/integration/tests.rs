@@ -142,6 +142,23 @@ fn clear_integration_path_env() {
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    std::env::remove_var(JCODE_HOME_ENV_VAR);
+}
+
+/// The commands jcode would run for `event`, read back from the config it
+/// actually wrote. Parsed with the real TOML parser so a config that only
+/// looks right cannot pass.
+fn jcode_hook_commands(config: &str, event: &str) -> Vec<String> {
+    let parsed: toml::Value = toml::from_str(config).expect("jcode config must be valid TOML");
+    match parsed.get("hooks").and_then(|hooks| hooks.get(event)) {
+        Some(toml::Value::String(command)) => vec![command.clone()],
+        Some(toml::Value::Array(commands)) => commands
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -4136,4 +4153,172 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     std::env::remove_var(GROK_HOME_ENV_VAR);
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_jcode_writes_hook_and_registers_every_event() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let jcode_dir = home.join(".jcode");
+    fs::create_dir_all(&jcode_dir).unwrap();
+    fs::write(
+        jcode_dir.join("config.toml"),
+        "model = \"claude\"\n\n[hooks]\nturn_end = \"echo keep\"\npre_tool_timeout_ms = 5000\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_jcode().unwrap();
+    let config = fs::read_to_string(&installed.config_path).unwrap();
+    let command = hook_command(&installed.hook_path, None);
+
+    assert_eq!(
+        installed.hook_path,
+        jcode_dir.join("hooks").join(JCODE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(
+        fs::read_to_string(&installed.hook_path).unwrap(),
+        JCODE_HOOK_ASSET
+    );
+    for event in JCODE_HOOK_EVENTS {
+        assert!(
+            jcode_hook_commands(&config, event).contains(&command),
+            "jcode config is missing the herdr command for {event}"
+        );
+    }
+    // An unrelated command the user configured must survive, and must keep
+    // running first so herdr never displaces an existing dispatcher.
+    assert_eq!(
+        jcode_hook_commands(&config, "turn_end"),
+        vec!["echo keep".to_string(), command.clone()]
+    );
+    assert!(config.contains("model = \"claude\""));
+    assert!(config.contains("pre_tool_timeout_ms = 5000"));
+
+    // HOME must be unset again before this test returns. Tests share one
+    // process, so leaving it pointed at a temp dir that is about to be
+    // deleted breaks every later test that resolves a path from it.
+    std::env::remove_var("HOME");
+    remove_dir_all_if_exists(&base).unwrap();
+    clear_integration_path_env();
+}
+
+#[test]
+fn install_jcode_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let jcode_dir = base.join("custom-jcode");
+    fs::create_dir_all(&jcode_dir).unwrap();
+    std::env::set_var(JCODE_HOME_ENV_VAR, &jcode_dir);
+
+    let first = install_jcode().unwrap();
+    let after_first = fs::read_to_string(&first.config_path).unwrap();
+    let second = install_jcode().unwrap();
+    let after_second = fs::read_to_string(&second.config_path).unwrap();
+
+    assert_eq!(after_first, after_second);
+    let command = hook_command(&second.hook_path, None);
+    for event in JCODE_HOOK_EVENTS {
+        assert_eq!(
+            jcode_hook_commands(&after_second, event),
+            vec![command.clone()],
+            "reinstall duplicated the {event} hook"
+        );
+    }
+
+    remove_dir_all_if_exists(&base).unwrap();
+    clear_integration_path_env();
+}
+
+#[test]
+fn uninstall_jcode_keeps_other_hook_commands() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let jcode_dir = base.join("custom-jcode");
+    fs::create_dir_all(&jcode_dir).unwrap();
+    std::env::set_var(JCODE_HOME_ENV_VAR, &jcode_dir);
+    fs::write(
+        jcode_dir.join("config.toml"),
+        "[hooks]\nturn_end = \"echo keep\"\n",
+    )
+    .unwrap();
+
+    install_jcode().unwrap();
+    let result = uninstall_jcode().unwrap();
+    let config = fs::read_to_string(&result.config_path).unwrap();
+
+    assert!(result.removed_hook_file);
+    assert!(result.updated_config);
+    assert!(!result.hook_path.exists());
+    assert_eq!(
+        jcode_hook_commands(&config, "turn_end"),
+        vec!["echo keep".to_string()]
+    );
+    // Events herdr introduced are removed outright rather than left empty.
+    assert!(jcode_hook_commands(&config, "post_tool").is_empty());
+    assert!(jcode_hook_commands(&config, "session_start").is_empty());
+
+    remove_dir_all_if_exists(&base).unwrap();
+    clear_integration_path_env();
+}
+
+#[test]
+fn install_jcode_creates_hooks_table_when_absent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let jcode_dir = base.join("custom-jcode");
+    fs::create_dir_all(&jcode_dir).unwrap();
+    std::env::set_var(JCODE_HOME_ENV_VAR, &jcode_dir);
+    fs::write(jcode_dir.join("config.toml"), "model = \"claude\"\n").unwrap();
+
+    let installed = install_jcode().unwrap();
+    let config = fs::read_to_string(&installed.config_path).unwrap();
+    let command = hook_command(&installed.hook_path, None);
+
+    for event in JCODE_HOOK_EVENTS {
+        assert_eq!(
+            jcode_hook_commands(&config, event),
+            vec![command.clone()],
+            "missing {event} after creating the table"
+        );
+    }
+    assert!(config.contains("model = \"claude\""));
+
+    remove_dir_all_if_exists(&base).unwrap();
+    clear_integration_path_env();
+}
+
+#[test]
+fn install_jcode_requires_an_existing_config_directory() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    std::env::set_var(JCODE_HOME_ENV_VAR, base.join("missing"));
+
+    assert!(install_jcode().is_err());
+
+    clear_integration_path_env();
+}
+
+#[test]
+fn jcode_toml_values_round_trip_through_both_string_forms() {
+    // A hand-written config may use literal strings or a multi-command array;
+    // both must be understood or a reinstall silently drops the user's hook.
+    assert_eq!(
+        parse_toml_string_or_array("'echo one'"),
+        vec!["echo one".to_string()]
+    );
+    assert_eq!(
+        parse_toml_string_or_array("[\"a\", 'b'] # trailing comment"),
+        vec!["a".to_string(), "b".to_string()]
+    );
+    assert_eq!(
+        parse_toml_string_or_array("\"quoted \\\" hash # not a comment\""),
+        vec!["quoted \" hash # not a comment".to_string()]
+    );
+    assert_eq!(render_toml_string_or_array(&["one".to_string()]), "\"one\"");
+    assert_eq!(
+        render_toml_string_or_array(&["one".to_string(), "two".to_string()]),
+        "[\"one\", \"two\"]"
+    );
 }

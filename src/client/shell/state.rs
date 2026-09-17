@@ -81,6 +81,9 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    /// How long an idle pane sits before its indicator ages; see
+    /// `crate::config::IDLE_STALE_CHOICES` for the offered thresholds.
+    pub(super) idle_stale_after_seconds: u64,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -440,6 +443,7 @@ pub(super) struct ClientGlobalMenuOverlay {
 pub(super) enum ClientSettingsSection {
     Theme,
     Indicators,
+    IdleStale,
     Sound,
     Toast,
     Integrations,
@@ -449,6 +453,7 @@ impl ClientSettingsSection {
     pub(super) const ALL: &[Self] = &[
         Self::Theme,
         Self::Indicators,
+        Self::IdleStale,
         Self::Sound,
         Self::Toast,
         Self::Integrations,
@@ -458,6 +463,7 @@ impl ClientSettingsSection {
         match self {
             Self::Theme => "theme",
             Self::Indicators => "indicators",
+            Self::IdleStale => "idle aging",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::Integrations => "integrations",

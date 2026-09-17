@@ -825,6 +825,11 @@ pub struct AppState {
     /// Virtual terminal size (columns, rows) used when no client is attached.
     pub(crate) headless_size: (u16, u16),
     pub agent_panel_sort: AgentPanelSort,
+    /// How long an idle pane sits before its indicator ages.
+    ///
+    /// Clients compare it against the relevant clock: the terminal's
+    /// state_entered_at for an unread result, the pane's seen_at once looked at.
+    pub idle_stale_after: std::time::Duration,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -1053,6 +1058,7 @@ impl AppState {
                 crate::config::DEFAULT_HEADLESS_ROWS,
             ),
             agent_panel_sort: AgentPanelSort::Spaces,
+            idle_stale_after: std::time::Duration::from_secs(300),
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),

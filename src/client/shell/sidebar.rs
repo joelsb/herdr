@@ -359,7 +359,16 @@ pub(crate) fn render_sidebar(
         );
     }
 
-    let footer_y = workspace_area.bottom().saturating_sub(1);
+    // The workspace footer ('new'/'menu') used to sit safely in the middle of
+    // the sidebar because the workspace section was on top; now that it is the
+    // bottom section, its own last row can coincide with the sidebar's fixed
+    // collapse-toggle glyph at `area.bottom() - 1`. Keep the footer one row
+    // above that reserved row whenever the workspace section reaches the
+    // sidebar's bottom edge.
+    let footer_y = workspace_area
+        .bottom()
+        .saturating_sub(1)
+        .min(area.bottom().saturating_sub(2));
     if config.mouse_capture {
         hits.new_workspace = Rect::new(
             workspace_area.x,

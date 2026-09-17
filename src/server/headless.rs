@@ -3367,6 +3367,7 @@ impl HeadlessServer {
             changed = true;
         }
 
+        changed |= self.app.repaint_due_idle_age(now);
         changed |= self.app.handle_tab_bar_status_tasks(now);
 
         if geometry_dirty {

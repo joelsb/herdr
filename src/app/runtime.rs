@@ -42,6 +42,27 @@ impl App {
 
     pub(crate) fn sync_agent_metadata_deadline(&mut self) {
         self.agent_metadata_deadline = self.state.next_agent_metadata_expiry();
+        self.sync_idle_age_deadline();
+    }
+
+    pub(crate) fn sync_idle_age_deadline(&mut self) {
+        self.idle_age_deadline = self.state.next_idle_age_expiry();
+    }
+
+    /// Repaint when an idle pane has aged past the threshold.
+    ///
+    /// Nothing mutates: the indicator is derived from the clock, so crossing the
+    /// threshold only needs the frame redrawn and the next deadline recomputed.
+    pub(crate) fn repaint_due_idle_age(&mut self, now: Instant) -> bool {
+        if self.idle_age_deadline.is_none_or(|deadline| now < deadline) {
+            return false;
+        }
+        // Delivery (sound and toast) happens inside the state method, which
+        // already owns the toast and sound policy; the returned list is only for
+        // tests and future client fanout.
+        let _stale = self.state.alert_stale_unread_panes_at(now);
+        self.sync_idle_age_deadline();
+        true
     }
 
     pub(crate) fn expire_due_metadata(&mut self, now: Instant) -> bool {
@@ -157,6 +178,7 @@ impl App {
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,
+            self.idle_age_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
             self.next_tab_bar_status_deadline(),

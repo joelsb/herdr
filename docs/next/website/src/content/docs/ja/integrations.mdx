@@ -29,6 +29,7 @@ herdr integration install qwen
 herdr integration install cursor
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install jcode
 ```
 
 ## インテグレーションをアンインストールする
@@ -51,6 +52,7 @@ herdr integration uninstall qwen
 herdr integration uninstall cursor
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall jcode
 ```
 
 ## Herdr がインテグレーションをどう使うか
@@ -59,7 +61,7 @@ Herdr はインテグレーションを 2 つの異なる方法で使います:
 
 | インテグレーションの種類 | エージェント | 効果 |
 | --- | --- | --- |
-| ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
+| ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode、Jcode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
 | セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Qwen Code、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
 
 カスタムインテグレーションも、ネイティブのターミナル UI では見えない状態を定義する場合に状態を報告できます。Herdr への組み込みや、認識済みのエージェント実行ファイルは必要ありません。
@@ -330,6 +332,22 @@ herdr integration install grok
 Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルを統合するため、インストールは Herdr の `SessionStart` エントリだけを含む `hooks/herdr.json` と `hooks/herdr-agent-state.sh`（Windows では `hooks/herdr-agent-state.ps1`）を書き込み、ほかのフックファイルには触れません。アンインストールは Herdr 所有のこの 2 ファイルだけを削除します。
 
 Grok がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `grok --resume <id>` でペインを resume できます。
+
+## Jcode
+
+Jcode フックをインストールします:
+
+```bash
+herdr integration install jcode
+```
+
+このフックは Jcode のライフサイクル状態とセッション識別子を Herdr に報告し、`idle`、`working`、`blocked` の権威ある状態とネイティブな復元を提供します。Jcode には画面マニフェストのフォールバックがありません。状態は Herdr ペイン内で Jcode が動作している間、フックから取得されます。
+
+Herdr は既定で `~/.jcode` を使用し、`JCODE_HOME` が設定されている場合はそちらを使用します。Jcode の設定ディレクトリが既に存在している必要があります。インストールは `hooks/herdr-agent-state.sh` を書き込み、`config.toml` の `[hooks]` テーブルの各ライフサイクルイベントに Herdr のコマンドを追加します。Jcode は 1 つのイベントに複数のコマンドを指定できるため、インストールは Herdr のコマンドを追記し、既存のフックコマンドはそのまま残します。アンインストールは Herdr 自身のエントリのみを削除し、フックスクリプトを削除します。
+
+独自の可視ペインで起動された Jcode の swarm ワーカーは対象外です。そのペインは自分自身で報告するためです。
+
+Herdr は保存された Jcode セッションを `jcode --resume <id>` で復元します。
 
 ## カスタムステータスラベル
 

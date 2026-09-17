@@ -158,6 +158,10 @@ pub(crate) fn keybind_help_groups(
                     "split horizontal",
                 ),
                 entry(binding_label(&keybinds.close_pane), "close pane"),
+                entry(
+                    binding_label(&keybinds.close_pane_if_idle),
+                    "close pane if idle",
+                ),
                 entry(binding_label(&keybinds.rename_pane), "rename pane"),
                 entry(binding_label(&keybinds.edit_scrollback), "edit scrollback"),
                 entry(binding_label(&keybinds.copy_mode), "copy mode"),

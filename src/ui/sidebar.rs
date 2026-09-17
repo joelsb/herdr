@@ -16,6 +16,13 @@ use crate::app::AppState;
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
 
+/// Metadata token an orchestrating agent reports on a pane it spawned, holding
+/// the public pane id of the pane that spawned it (`herdr pane report-metadata
+/// <child> --source <id> --token parent_pane=<parent pane id>`). It is a plain
+/// metadata token rather than pane state so the hierarchy needs no wire or
+/// persistence change; a pane whose parent is gone simply renders top level.
+pub(crate) const SUBAGENT_PARENT_TOKEN: &str = "parent_pane";
+
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
     pub tab_idx: usize,
@@ -23,46 +30,53 @@ pub(crate) struct AgentPanelEntry {
     pub agent_kind_label: Option<String>,
     pub state: AgentState,
     pub seen: bool,
+    /// Timestamp this entry's staleness is measured from; see PaneDetail.
+    ///
+    /// Not yet read anywhere: no production caller wires this into the
+    /// stale/parked visualization yet (see `.local/PORT-0.9.0.md`). Kept
+    /// populated so that follow-up only needs to consume it, not re-plumb it.
+    #[allow(dead_code)]
+    pub aged_from: std::time::Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub tokens: std::collections::HashMap<String, String>,
+    /// This pane reported a parent that is also in the panel, so it renders as a
+    /// child row. See [`nest_subagent_entries`].
+    pub nested: bool,
 }
 
+/// Heights of the two expanded sidebar sections, top first. `split_ratio` is
+/// the share taken by the top (agents) section.
 fn sidebar_section_heights(total_height: u16, split_ratio: f32) -> (u16, u16) {
     if total_height == 0 {
         return (0, 0);
     }
     if total_height < 6 {
-        let workspace_height = total_height.div_ceil(2);
-        return (
-            workspace_height,
-            total_height.saturating_sub(workspace_height),
-        );
+        let top_height = total_height.div_ceil(2);
+        return (top_height, total_height.saturating_sub(top_height));
     }
 
-    let workspace_height = ((total_height as f32) * split_ratio.clamp(0.1, 0.9)).round() as u16;
-    let workspace_height = workspace_height.clamp(3, total_height.saturating_sub(3));
-    (
-        workspace_height,
-        total_height.saturating_sub(workspace_height),
-    )
+    let top_height = ((total_height as f32) * split_ratio.clamp(0.1, 0.9)).round() as u16;
+    let top_height = top_height.clamp(3, total_height.saturating_sub(3));
+    (top_height, total_height.saturating_sub(top_height))
 }
 
+/// Agents on top, spaces below. Returned as `(spaces, agents)` because callers
+/// address the sections by role, not by position.
 pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.is_empty() {
         return (Rect::default(), Rect::default());
     }
 
-    let (workspace_height, detail_height) = sidebar_section_heights(content.height, split_ratio);
-    (
-        Rect::new(content.x, content.y, content.width, workspace_height),
-        Rect::new(
-            content.x,
-            content.y + workspace_height,
-            content.width,
-            detail_height,
-        ),
-    )
+    let (detail_height, workspace_height) = sidebar_section_heights(content.height, split_ratio);
+    let detail_area = Rect::new(content.x, content.y, content.width, detail_height);
+    let workspace_area = Rect::new(
+        content.x,
+        content.y + detail_height,
+        content.width,
+        workspace_height,
+    );
+    (workspace_area, detail_area)
 }
 
 pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect {
@@ -71,8 +85,8 @@ pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect
         return Rect::default();
     }
 
-    let (workspace_height, _) = sidebar_section_heights(content.height, split_ratio);
-    Rect::new(content.x, content.y + workspace_height, content.width, 1)
+    let (detail_height, _) = sidebar_section_heights(content.height, split_ratio);
+    Rect::new(content.x, content.y + detail_height, content.width, 1)
 }
 
 pub(crate) fn agent_panel_entries_from(
@@ -94,13 +108,97 @@ pub(crate) fn agent_panel_entries_from(
                     agent_kind_label: detail.agent_kind_label,
                     state: detail.state,
                     seen: detail.seen,
+                    aged_from: detail.aged_from,
                     last_agent_state_change_seq: detail.last_agent_state_change_seq,
                     tokens: detail.tokens,
+                    nested: false,
                 })
         })
         .collect();
     crate::app::agent_view::apply_agent_view(app, &mut entries);
+    nest_subagent_entries(app, &mut entries);
     entries
+}
+
+fn entry_public_pane_id(app: &AppState, entry: &AgentPanelEntry) -> Option<String> {
+    let ws = app.workspaces.get(entry.ws_idx)?;
+    let number = ws.public_pane_number(entry.pane_id)?;
+    Some(crate::workspace::public_pane_id_for_number(&ws.id, number))
+}
+
+/// Reorders entries so every pane that reported a [`SUBAGENT_PARENT_TOKEN`]
+/// pointing at another entry follows that entry and renders indented. Children
+/// keep their incoming relative order, descendants are flattened to one indent
+/// level, and a token naming a pane that is filtered out or gone leaves the
+/// entry where it was.
+fn nest_subagent_entries(app: &AppState, entries: &mut Vec<AgentPanelEntry>) {
+    if !entries
+        .iter()
+        .any(|entry| entry.tokens.contains_key(SUBAGENT_PARENT_TOKEN))
+    {
+        return;
+    }
+
+    let index_by_pane_id = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| Some((entry_public_pane_id(app, entry)?, index)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let parent_of = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            entry
+                .tokens
+                .get(SUBAGENT_PARENT_TOKEN)
+                .and_then(|parent| index_by_pane_id.get(parent).copied())
+                .filter(|parent| *parent != index)
+        })
+        .collect::<Vec<_>>();
+    if parent_of.iter().all(Option::is_none) {
+        return;
+    }
+
+    let mut children = vec![Vec::new(); entries.len()];
+    for (index, parent) in parent_of.iter().enumerate() {
+        if let Some(parent) = parent {
+            children[*parent].push(index);
+        }
+    }
+
+    let mut order = Vec::with_capacity(entries.len());
+    let mut placed = vec![false; entries.len()];
+    let mut stack = Vec::new();
+    for root in 0..entries.len() {
+        if parent_of[root].is_some() || placed[root] {
+            continue;
+        }
+        placed[root] = true;
+        order.push((root, false));
+        stack.extend(children[root].iter().rev().copied());
+        while let Some(child) = stack.pop() {
+            if placed[child] {
+                continue;
+            }
+            placed[child] = true;
+            order.push((child, true));
+            stack.extend(children[child].iter().rev().copied());
+        }
+    }
+    // Parent cycles never get a root, so keep those entries in their own order.
+    order.extend(
+        (0..entries.len())
+            .filter(|index| !placed[*index])
+            .map(|index| (index, false)),
+    );
+
+    let mut slots = entries.drain(..).map(Some).collect::<Vec<_>>();
+    entries.extend(order.into_iter().filter_map(|(index, nested)| {
+        slots[index].take().map(|mut entry| {
+            entry.nested = nested;
+            entry
+        })
+    }));
 }
 
 pub(crate) fn resolved_token_spans(
@@ -295,4 +393,112 @@ fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) 
         };
     }
     style
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::Workspace;
+
+    /// Workspace with one orchestrator pane and two panes it "spawned", wired
+    /// the way `herdr pane report-metadata --token parent_pane=<id>` wires them.
+    fn app_with_two_subagent_panes() -> (crate::app::state::AppState, Vec<crate::layout::PaneId>) {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut workspace = Workspace::test_new("orchestration");
+        let parent = workspace.tabs[0].root_pane;
+        let first_child = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let second_child = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let parent_public_id = crate::workspace::public_pane_id_for_number(
+            &workspace.id,
+            workspace.public_pane_number(parent).expect("parent number"),
+        );
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+
+        let parent_terminal_id = app.workspaces[0].tabs[0].panes[&parent]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&parent_terminal_id)
+            .unwrap()
+            .set_agent_name("pi".into());
+
+        for (pane_id, label) in [(first_child, "solo-athena"), (second_child, "solo-mautic")] {
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.set_agent_name(label.to_string());
+            terminal.metadata_tokens.patch(
+                std::collections::HashMap::from([(
+                    SUBAGENT_PARENT_TOKEN.to_string(),
+                    Some(parent_public_id.clone()),
+                )]),
+                None,
+                std::time::Instant::now(),
+            );
+        }
+
+        (app, vec![parent, first_child, second_child])
+    }
+
+    #[test]
+    fn reported_subagent_panes_follow_their_parent_and_are_marked_nested() {
+        let (app, panes) = app_with_two_subagent_panes();
+        let terminal_runtimes = TerminalRuntimeRegistry::new();
+
+        let entries = agent_panel_entries_from(&app, &terminal_runtimes);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.pane_id, entry.nested))
+                .collect::<Vec<_>>(),
+            vec![(panes[0], false), (panes[1], true), (panes[2], true)]
+        );
+    }
+
+    #[test]
+    fn a_parent_token_naming_an_unknown_pane_keeps_the_incoming_order() {
+        let (mut app, panes) = app_with_two_subagent_panes();
+        for pane_id in [panes[1], panes[2]] {
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .metadata_tokens
+                .patch(
+                    std::collections::HashMap::from([(
+                        SUBAGENT_PARENT_TOKEN.to_string(),
+                        Some("wZZ:p9".to_string()),
+                    )]),
+                    None,
+                    std::time::Instant::now(),
+                );
+        }
+        let terminal_runtimes = TerminalRuntimeRegistry::new();
+
+        let entries = agent_panel_entries_from(&app, &terminal_runtimes);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.pane_id, entry.nested))
+                .collect::<Vec<_>>(),
+            vec![(panes[0], false), (panes[1], false), (panes[2], false)]
+        );
+    }
+
+    #[test]
+    fn expanded_sidebar_sections_puts_the_agent_detail_section_on_top() {
+        let area = Rect::new(0, 0, 40, 20);
+        let (workspace_area, detail_area) = expanded_sidebar_sections(area, 0.5);
+        assert!(
+            detail_area.y < workspace_area.y,
+            "agents section must render above spaces"
+        );
+    }
 }

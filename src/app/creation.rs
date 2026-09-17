@@ -347,6 +347,11 @@ impl App {
             terminal_title_stripped: terminal.terminal_title_stripped(),
             display_agent: presentation.display_agent,
             agent_status: pane_agent_status(terminal.state, pane.seen),
+            state_age_seconds: Some(
+                std::time::Instant::now()
+                    .saturating_duration_since(terminal.state_entered_at())
+                    .as_secs(),
+            ),
             state_labels: presentation.state_labels,
             tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),
@@ -377,7 +382,8 @@ impl App {
 
     pub(super) fn workspace_info(&self, index: usize) -> crate::api::schema::WorkspaceInfo {
         let ws = &self.state.workspaces[index];
-        let (agg_state, seen) = ws.aggregate_state(&self.state.terminals);
+        let aggregate = ws.aggregate_state(&self.state.terminals);
+        let (agg_state, seen) = (aggregate.state, aggregate.seen);
         crate::api::schema::WorkspaceInfo {
             workspace_id: self.public_workspace_id(index),
             number: index + 1,

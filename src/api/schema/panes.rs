@@ -547,6 +547,13 @@ pub struct PaneInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_agent: Option<String>,
     pub agent_status: AgentStatus,
+    /// Seconds this pane's agent has held its current state.
+    ///
+    /// Advances only on a real transition, so a client can tell a result that
+    /// just landed from one that has been sitting unread. Absent for a pane with
+    /// no agent state worth aging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

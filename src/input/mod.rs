@@ -29,3 +29,7 @@ pub use model::{
     TextCommit,
 };
 pub use parse::parse_terminal_key_sequence;
+
+#[cfg(test)]
+#[path = "close_pane_if_idle_tests.rs"]
+mod close_pane_if_idle_tests;

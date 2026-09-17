@@ -17,6 +17,22 @@ fn indicator_index(style: crate::config::StatusIndicatorStyle) -> usize {
     usize::from(style == crate::config::StatusIndicatorStyle::Symbols)
 }
 
+fn idle_stale_index(seconds: u64) -> usize {
+    crate::config::IDLE_STALE_CHOICES
+        .iter()
+        .position(|(_, choice)| *choice == seconds)
+        // A config-file value outside the offered list still has to land
+        // somewhere; the default is the least surprising landing spot.
+        .unwrap_or(1)
+}
+
+fn idle_stale_for_index(index: usize) -> u64 {
+    crate::config::IDLE_STALE_CHOICES
+        .get(index)
+        .map(|(_, seconds)| *seconds)
+        .unwrap_or(300)
+}
+
 fn toast_index(delivery: crate::config::ToastDelivery) -> usize {
     match delivery {
         crate::config::ToastDelivery::Off => 0,
@@ -49,6 +65,9 @@ impl ClientShellState {
         match section {
             ClientSettingsSection::Theme => theme_index(&self.config.theme_name),
             ClientSettingsSection::Indicators => indicator_index(self.config.status_indicators),
+            ClientSettingsSection::IdleStale => {
+                idle_stale_index(self.config.idle_stale_after_seconds)
+            }
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
             ClientSettingsSection::Toast => toast_index(self.config.toast_delivery),
             ClientSettingsSection::Integrations => 0,
@@ -98,6 +117,7 @@ impl ClientShellState {
             Some(ClientShellOverlay::Settings(settings)) => match settings.section {
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
+                ClientSettingsSection::IdleStale => crate::config::IDLE_STALE_CHOICES.len(),
                 ClientSettingsSection::Toast => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
             },
@@ -204,6 +224,12 @@ impl ClientShellState {
                 };
                 self.save_settings_edit(
                     crate::config::ConfigEdit::StatusIndicators(style),
+                    outcome,
+                );
+            }
+            ClientSettingsSection::IdleStale => {
+                self.save_settings_edit(
+                    crate::config::ConfigEdit::IdleStaleAfter(idle_stale_for_index(selected)),
                     outcome,
                 );
             }

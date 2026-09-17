@@ -788,6 +788,12 @@
           "description": "Close the focused pane."
         },
         {
+          "key": "keys.close_pane_if_idle",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Close the focused pane, but only when nothing is running in it (its foreground job is just the pane's own shell). While a program owns the pane the key is forwarded to that program untouched, so this is safe to bind to a bare chord such as `alt+x`. A pane whose process state cannot be read counts as busy and is never closed. Unset by default."
+        },
+        {
           "key": "keys.zoom",
           "type": "keybinding",
           "default": "\"prefix+z\"",
@@ -1047,6 +1053,12 @@
             "dots",
             "symbols"
           ]
+        },
+        {
+          "key": "ui.idle_stale_after_seconds",
+          "type": "integer",
+          "default": "300",
+          "description": "How long an idle pane sits before its indicator ages: an unread result reads as stale, and a pane you have looked at reads as parked."
         },
         {
           "key": "ui.sidebar.agents.row_gap",

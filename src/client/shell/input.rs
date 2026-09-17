@@ -548,6 +548,16 @@ impl ClientShellState {
 
         match self.mode {
             ClientShellMode::Terminal => {
+                if self
+                    .config
+                    .keybinds
+                    .keybinds
+                    .close_pane_if_idle
+                    .matches_direct_key(key)
+                    && self.close_focused_pane_if_idle(outcome)
+                {
+                    return None;
+                }
                 if let Some(binding) =
                     crate::input::resolve_direct_binding(&self.config.keybinds.keybinds, key)
                 {
@@ -950,6 +960,35 @@ impl ClientShellState {
         self.snapshot
             .as_deref()
             .and_then(|snapshot| snapshot.focused_pane_id.clone())
+    }
+
+    /// Handle a `close_pane_if_idle` chord.
+    ///
+    /// Returns `true` only when the key was consumed, meaning the focused pane
+    /// looked idle and a close was requested. Every other outcome returns
+    /// `false` so the caller forwards the key to the pane unchanged: the whole
+    /// point of the binding is that it can be bound to a bare chord and still
+    /// reach a running program.
+    ///
+    /// "Idle" here means the client has no agent entry for the focused pane in
+    /// its cached snapshot, i.e. the pane is not hosting any detected or
+    /// managed agent. This fails closed: an unknown snapshot, an unfocused
+    /// pane, or a pane the endpoint has not reported on all count as busy.
+    fn close_focused_pane_if_idle(&mut self, outcome: &mut ClientShellInput) -> bool {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return false;
+        };
+        let Some(pane_id) = snapshot.focused_pane_id.clone() else {
+            return false;
+        };
+        if snapshot.agents.iter().any(|agent| agent.pane_id == pane_id) {
+            return false;
+        }
+        self.push_endpoint_method(
+            crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget { pane_id }),
+            outcome,
+        );
+        true
     }
 
     pub(crate) fn clipboard_image_target(

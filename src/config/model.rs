@@ -435,6 +435,11 @@ pub struct KeysConfig {
     pub split_horizontal: BindingConfig,
     /// Close the focused pane. Default: "prefix+x"
     pub close_pane: BindingConfig,
+    /// Close the focused pane, but only when nothing is running in it (the
+    /// foreground job is the pane's own shell). When a program owns the pane the
+    /// key is forwarded to it untouched, so this is safe to bind directly to a
+    /// bare chord such as "alt+x". Unset by default.
+    pub close_pane_if_idle: BindingConfig,
     /// Toggle zoom for the focused pane. Default: "prefix+z"
     #[serde(alias = "fullscreen")]
     pub zoom: BindingConfig,
@@ -566,6 +571,8 @@ pub(crate) struct KeysConfigOverlay {
     split_horizontal: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     close_pane: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    close_pane_if_idle: Option<BindingConfig>,
     #[serde(alias = "fullscreen", skip_serializing_if = "Option::is_none")]
     zoom: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -661,6 +668,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(split_vertical);
         apply_field!(split_horizontal);
         apply_field!(close_pane);
+        apply_field!(close_pane_if_idle);
         apply_field!(zoom);
         apply_field!(resize_mode);
         apply_field!(resize_pane_left);
@@ -765,6 +773,7 @@ impl KeysConfig {
         copy_effective_action_field!(split_vertical, keybinds.split_vertical);
         copy_effective_action_field!(split_horizontal, keybinds.split_horizontal);
         copy_effective_action_field!(close_pane, keybinds.close_pane);
+        copy_effective_action_field!(close_pane_if_idle, keybinds.close_pane_if_idle);
         copy_effective_action_field!(zoom, keybinds.zoom);
         copy_effective_action_field!(resize_mode, keybinds.resize_mode);
         copy_effective_action_field!(resize_pane_left, keybinds.resize_pane_left);
@@ -843,6 +852,18 @@ pub enum TabBarPositionConfig {
     Top,
     Bottom,
 }
+
+/// Idle-aging thresholds offered by the settings screen, in seconds.
+///
+/// A fixed list rather than free text: the settings screen has no text-input
+/// pattern to reuse, and the useful value is "longer than a glance", not a
+/// precise number. A config file may still set any value.
+pub const IDLE_STALE_CHOICES: &[(&str, u64)] = &[
+    ("2 minutes", 120),
+    ("5 minutes", 300),
+    ("10 minutes", 600),
+    ("30 minutes", 1800),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PaneBordersConfig {
@@ -962,6 +983,13 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// How long an idle pane sits before its indicator ages, in seconds.
+    /// Default: 300.
+    ///
+    /// An unread result is aged from when it appeared and then reads as stale;
+    /// a pane the user has looked at is aged from that look and then reads as
+    /// parked.
+    pub idle_stale_after_seconds: u64,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1133,6 +1161,9 @@ impl Default for KeysConfig {
             split_vertical: BindingConfig::one("prefix+v"),
             split_horizontal: BindingConfig::one("prefix+minus"),
             close_pane: BindingConfig::one("prefix+x"),
+            // Unset by default: closing a pane on a bare chord is a strong
+            // opt-in, even guarded by the idle check.
+            close_pane_if_idle: BindingConfig::empty(),
             zoom: BindingConfig::one("prefix+z"),
             resize_mode: BindingConfig::one("prefix+r"),
             resize_pane_left: BindingConfig::empty(),
@@ -1186,6 +1217,7 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            idle_stale_after_seconds: 300,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1445,6 +1477,20 @@ status_indicators = "symbols"
         )
         .unwrap();
         assert_eq!(config.ui.status_indicators, StatusIndicatorStyle::Symbols);
+    }
+
+    #[test]
+    fn idle_stale_threshold_defaults_to_five_minutes_and_parses() {
+        assert_eq!(Config::default().ui.idle_stale_after_seconds, 300);
+
+        let config: Config = toml::from_str(
+            r#"
+[ui]
+idle_stale_after_seconds = 120
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.ui.idle_stale_after_seconds, 120);
     }
 
     #[test]

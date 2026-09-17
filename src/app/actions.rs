@@ -346,6 +346,111 @@ impl AppState {
             .min()
     }
 
+    /// When the next idle pane crosses the staleness threshold.
+    ///
+    /// Presentation reads the clock at render time, so nothing here mutates
+    /// state; the deadline exists only so the render loop wakes once per
+    /// crossing instead of polling. Needs the pane as well as the terminal
+    /// because which clock applies depends on whether the user has looked.
+    pub(crate) fn next_idle_age_expiry(&self) -> Option<std::time::Instant> {
+        let threshold = self.idle_stale_after;
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.tabs.iter().flat_map(|tab| tab.panes.values()))
+            .filter_map(|pane| {
+                let terminal = self.terminals.get(&pane.attached_terminal_id)?;
+                if terminal.state != AgentState::Idle {
+                    return None;
+                }
+                let clock = if pane.seen {
+                    pane.seen_at
+                } else {
+                    terminal.state_entered_at()
+                };
+                Some(clock + threshold)
+            })
+            .min()
+    }
+
+    /// Alert for idle panes whose unread result has aged past the threshold.
+    ///
+    /// Timer-driven rather than state-change-driven, so it cannot reuse the
+    /// EffectiveStateChange path every other agent notification runs through; it
+    /// reuses the delivery builder directly instead, which keeps the existing
+    /// active-tab suppression, sound policy, and agent-identity checks.
+    ///
+    /// Fires at most once per idle episode: the flag is cleared whenever the
+    /// user looks at the pane or the terminal leaves Idle, so a timer that keeps
+    /// firing while a pane sits stale stays quiet after the first alert.
+    pub(crate) fn alert_stale_unread_panes_at(
+        &mut self,
+        now: std::time::Instant,
+    ) -> Vec<AgentNotificationDelivery> {
+        let threshold = self.idle_stale_after;
+        let mut newly_stale: Vec<AgentNotificationDelivery> = Vec::new();
+
+        for ws_idx in 0..self.workspaces.len() {
+            let panes: Vec<_> = self.workspaces[ws_idx]
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.panes.iter())
+                .filter_map(|(pane_id, pane)| {
+                    if pane.stale_notified {
+                        return None;
+                    }
+                    let terminal = self.terminals.get(&pane.attached_terminal_id)?;
+                    if terminal.state != AgentState::Idle {
+                        return None;
+                    }
+                    let age = crate::ui::idle_age_for(
+                        pane.seen,
+                        now.saturating_duration_since(crate::workspace::pane_aged_from(
+                            pane, terminal,
+                        )),
+                        threshold,
+                    );
+                    if !age.warrants_unread_alert() {
+                        return None;
+                    }
+                    let agent_label = terminal
+                        .agent_name
+                        .clone()
+                        .or_else(|| terminal.effective_agent_label().map(str::to_string))?;
+                    Some((*pane_id, agent_label, terminal.effective_known_agent()))
+                })
+                .collect();
+
+            for (pane_id, agent_label, known_agent) in panes {
+                // Mark the episode alerted whether or not a delivery results:
+                // when suppression swallows it, re-checking every tick would
+                // just burn work until the user looks.
+                if let Some(pane) = self.workspaces[ws_idx]
+                    .tabs
+                    .iter_mut()
+                    .find_map(|tab| tab.panes.get_mut(&pane_id))
+                {
+                    pane.stale_notified = true;
+                }
+
+                let workspace_id = self.workspaces[ws_idx].id.clone();
+                if let Some(delivery) = self.agent_notification_delivery(
+                    ws_idx,
+                    pane_id,
+                    workspace_id,
+                    agent_label,
+                    known_agent,
+                    ToastKind::NeedsAttention,
+                    AgentState::Idle,
+                ) {
+                    self.apply_agent_notification_delivery(&delivery);
+                    newly_stale.push(delivery);
+                }
+            }
+        }
+
+        newly_stale
+    }
+
     pub(crate) fn expire_agent_metadata_at(
         &mut self,
         scheduled_deadline: std::time::Instant,
@@ -533,11 +638,9 @@ impl AppState {
         };
 
         let mut changed = false;
+        let now = std::time::Instant::now();
         for pane in tab.panes.values_mut() {
-            if !pane.seen {
-                pane.seen = true;
-                changed = true;
-            }
+            changed |= pane.mark_seen(now);
         }
         changed
     }
@@ -1957,10 +2060,24 @@ impl AppState {
             .iter_mut()
             .find_map(|tab| tab.panes.get_mut(&pane_id))?;
 
+        // Entering idle starts a new episode, so the unread alert re-arms here
+        // rather than inside the branches below: a pane can become idle without
+        // being a "completion" (suppressed acquisition, process exit), and those
+        // episodes must still be alertable.
+        if change.state == AgentState::Idle && change.previous_state != AgentState::Idle {
+            pane.stale_notified = false;
+        }
+
         if change.state != AgentState::Idle {
-            pane.seen = true;
+            pane.mark_seen(std::time::Instant::now());
         } else if !suppress_completion && is_completion_transition(change) {
-            pane.seen = suppress_active_tab_notifications;
+            if suppress_active_tab_notifications {
+                // The user is looking at this pane as the result lands, which
+                // counts as a look and starts the parked clock from here.
+                pane.mark_seen(std::time::Instant::now());
+            } else {
+                pane.seen = false;
+            }
         }
         let seen = pane.seen;
 
@@ -2652,6 +2769,266 @@ mod tests {
 
         state.switch_workspace(1);
         assert!(state.workspaces[1].panes.get(&id).unwrap().seen);
+    }
+
+    /// Drive one pane to idle at `t0` and return its ids.
+    fn state_with_idle_pane(
+        now: std::time::Instant,
+    ) -> (AppState, PaneId, crate::terminal::TerminalId) {
+        let mut state = app_with_workspaces(&["a"]);
+        state.idle_stale_after = std::time::Duration::from_secs(300);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.set_agent_name("pi".into());
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            now,
+        );
+        (state, pane_id, terminal_id)
+    }
+
+    #[test]
+    fn an_unread_result_alerts_once_when_it_goes_stale() {
+        let t0 = std::time::Instant::now();
+        let (mut state, pane_id, _) = state_with_idle_pane(t0);
+        // Unseen and off the active tab, which is what "you have not looked" is.
+        state.active = None;
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .seen = false;
+
+        let crossed = t0 + std::time::Duration::from_secs(300);
+        let first = state.alert_stale_unread_panes_at(crossed);
+        assert_eq!(first.len(), 1, "crossing the threshold must alert once");
+
+        // The pane is still stale a minute later, but the episode already
+        // alerted, so a timer that fires again must stay quiet.
+        let later = crossed + std::time::Duration::from_secs(60);
+        assert!(state.alert_stale_unread_panes_at(later).is_empty());
+    }
+
+    #[test]
+    fn a_pane_the_user_looked_at_never_alerts_on_going_parked() {
+        let t0 = std::time::Instant::now();
+        let (mut state, pane_id, _) = state_with_idle_pane(t0);
+        state.active = None;
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .mark_seen(t0);
+
+        // Parking is a deliberate choice by the user, so it is silent.
+        let crossed = t0 + std::time::Duration::from_secs(300);
+        assert!(state.alert_stale_unread_panes_at(crossed).is_empty());
+    }
+
+    #[test]
+    fn a_fresh_or_looked_at_pane_does_not_alert_before_the_threshold() {
+        let t0 = std::time::Instant::now();
+        let (mut state, pane_id, _) = state_with_idle_pane(t0);
+        state.active = None;
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .seen = false;
+
+        let before = t0 + std::time::Duration::from_secs(299);
+        assert!(state.alert_stale_unread_panes_at(before).is_empty());
+
+        // Looking at it before the threshold cancels the alert entirely.
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .mark_seen(before);
+        let crossed = t0 + std::time::Duration::from_secs(300);
+        assert!(state.alert_stale_unread_panes_at(crossed).is_empty());
+    }
+
+    #[test]
+    fn a_working_pane_never_alerts_as_stale() {
+        let t0 = std::time::Instant::now();
+        let (mut state, pane_id, terminal_id) = state_with_idle_pane(t0);
+        state.active = None;
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .seen = false;
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .set_detected_state_with_screen_signals_at(
+                Some(Agent::Pi),
+                AgentState::Working,
+                false,
+                false,
+                false,
+                false,
+                t0 + std::time::Duration::from_secs(1),
+            );
+
+        let crossed = t0 + std::time::Duration::from_secs(300);
+        assert!(state.alert_stale_unread_panes_at(crossed).is_empty());
+    }
+
+    #[test]
+    fn the_pane_you_are_watching_does_not_alert_as_stale() {
+        let t0 = std::time::Instant::now();
+        let (mut state, pane_id, _) = state_with_idle_pane(t0);
+        // Active workspace plus focused outer terminal is the existing
+        // suppression condition for completion notifications, and it governs
+        // this alert the same way.
+        state.active = Some(0);
+        state.outer_terminal_focus = Some(true);
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .seen = false;
+
+        let crossed = t0 + std::time::Duration::from_secs(300);
+        assert!(state.alert_stale_unread_panes_at(crossed).is_empty());
+    }
+
+    #[test]
+    fn idle_age_deadline_uses_the_result_clock_for_an_unread_pane() {
+        let mut state = app_with_workspaces(&["a"]);
+        state.idle_stale_after = std::time::Duration::from_secs(300);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+
+        let t0 = std::time::Instant::now();
+        let terminal = state.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            t0,
+        );
+        let pane = state.workspaces[0].panes.get_mut(&pane_id).expect("pane");
+        pane.seen = false;
+        // A look clock far in the future must be ignored for an unread pane:
+        // the question is how long the result has been sitting, not when the
+        // user last looked at something else.
+        pane.seen_at = t0 + std::time::Duration::from_secs(10_000);
+
+        assert_eq!(
+            state.next_idle_age_expiry(),
+            Some(t0 + std::time::Duration::from_secs(300))
+        );
+    }
+
+    #[test]
+    fn idle_age_deadline_uses_the_look_clock_once_seen_and_a_look_pushes_it_out() {
+        let mut state = app_with_workspaces(&["a"]);
+        state.idle_stale_after = std::time::Duration::from_secs(300);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+
+        let t0 = std::time::Instant::now();
+        let terminal = state.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            t0,
+        );
+
+        let looked_at = t0 + std::time::Duration::from_secs(60);
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .mark_seen(looked_at);
+        assert_eq!(
+            state.next_idle_age_expiry(),
+            Some(looked_at + std::time::Duration::from_secs(300))
+        );
+
+        // Looking again restarts the parked countdown, which is the whole point
+        // of the second clock.
+        let looked_again = t0 + std::time::Duration::from_secs(120);
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .mark_seen(looked_again);
+        assert_eq!(
+            state.next_idle_age_expiry(),
+            Some(looked_again + std::time::Duration::from_secs(300))
+        );
+    }
+
+    #[test]
+    fn a_working_pane_schedules_no_idle_age_deadline() {
+        let mut state = app_with_workspaces(&["a"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+
+        let terminal = state.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Working,
+            false,
+            false,
+            false,
+            false,
+            std::time::Instant::now(),
+        );
+
+        assert_eq!(state.next_idle_age_expiry(), None);
+    }
+
+    #[test]
+    fn marking_panes_seen_leaves_the_terminal_state_clock_alone() {
+        let mut state = app_with_workspaces(&["a", "b"]);
+        let id = *state.workspaces[1].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[1].panes[&id].attached_terminal_id.clone();
+        state.workspaces[1].panes.get_mut(&id).unwrap().seen = false;
+
+        let before = state
+            .terminals
+            .get(&terminal_id)
+            .map(|terminal| terminal.state_entered_at())
+            .expect("terminal");
+
+        state.switch_workspace(1);
+
+        // The unseen bucket ages from when the result appeared, so looking at a
+        // pane must not restart that clock; only the look clock moves.
+        let after = state
+            .terminals
+            .get(&terminal_id)
+            .map(|terminal| terminal.state_entered_at())
+            .expect("terminal");
+        assert_eq!(before, after);
+        assert!(state.workspaces[1].panes[&id].seen);
     }
 
     #[test]

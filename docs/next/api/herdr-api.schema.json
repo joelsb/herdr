@@ -823,6 +823,15 @@
                 }
               ]
             },
+            "state_age_seconds": {
+              "description": "Seconds this pane's agent has held its current state.\n\nAdvances only on a real transition, so a client can tell a result that\njust landed from one that has been sitting unread. Absent for a pane with\nno agent state worth aging.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "state_labels": {
               "additionalProperties": {
                 "type": "string"
@@ -2174,7 +2183,8 @@
             "cursor",
             "mastracode",
             "antigravity_cli",
-            "grok"
+            "grok",
+            "jcode"
           ],
           "type": "string"
         },
@@ -7708,7 +7718,8 @@
             "cursor",
             "mastracode",
             "antigravity_cli",
-            "grok"
+            "grok",
+            "jcode"
           ],
           "type": "string"
         },
@@ -7986,6 +7997,15 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "state_age_seconds": {
+              "description": "Seconds this pane's agent has held its current state.\n\nAdvances only on a real transition, so a client can tell a result that\njust landed from one that has been sitting unread. Absent for a pane with\nno agent state worth aging.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
               ]
             },
             "state_labels": {
