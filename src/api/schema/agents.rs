@@ -221,6 +221,9 @@ pub struct AgentInfo {
     /// The current idle transition completed work, independently of who has viewed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_seq: Option<u64>,
+    /// Seconds this agent's state has held; see `PaneInfo::state_age_seconds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

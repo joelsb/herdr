@@ -6604,6 +6604,15 @@
             "screen_detection_skipped": {
               "type": "boolean"
             },
+            "state_age_seconds": {
+              "description": "Seconds this agent's state has held; see `PaneInfo::state_age_seconds`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "state_change_seq": {
               "default": 0,
               "format": "uint64",

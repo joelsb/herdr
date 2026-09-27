@@ -1088,6 +1088,11 @@ pub struct ClientShellAgent {
     pub state_change_seq: u64,
     pub state_labels: Vec<(String, String)>,
     pub tokens: Vec<(String, String)>,
+    /// Seconds this agent's state has held, for the client to classify idle
+    /// age (see `crate::ui::status::idle_age_for`). Additive and optional so
+    /// an older server omitting it just renders the fresh glyph.
+    #[serde(default)]
+    pub state_age_seconds: Option<u64>,
     pub focused: bool,
 }
 

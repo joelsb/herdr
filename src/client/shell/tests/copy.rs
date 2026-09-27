@@ -1140,6 +1140,7 @@ fn navigator_searches_ancestor_context_and_keeps_split_agents_individually_actio
         state_change_seq: 1,
         state_labels: Vec::new(),
         tokens: Vec::new(),
+        state_age_seconds: None,
         focused: true,
     };
     let mut second_agent = first_agent.clone();

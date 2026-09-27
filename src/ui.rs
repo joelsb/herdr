@@ -38,7 +38,9 @@ pub(crate) use self::sidebar::{
 };
 use self::status::copy_feedback_rect;
 pub(crate) use self::status::idle_age_for;
-pub(crate) use self::status::{render_config_diagnostic_buffer, render_copy_feedback_buffer};
+pub(crate) use self::status::{
+    render_config_diagnostic_buffer, render_copy_feedback_buffer, state_icon, state_label, IdleAge,
+};
 pub(crate) use self::tab_surface::{
     compute_tab_surface, compute_tab_surface_for, render_tab_surface, resize_tab_surface,
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,

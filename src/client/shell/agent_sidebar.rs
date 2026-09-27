@@ -19,6 +19,41 @@ pub(super) struct AgentRow {
     pub(super) nested: bool,
     /// Last child of its parent, so it draws the closing tree corner.
     pub(super) last_child: bool,
+    /// Seconds this agent's state has held, off the wire. `None` (an older
+    /// server, or no agent state yet) renders as fresh: see `idle_age_for`.
+    pub(super) state_age_seconds: Option<u64>,
+}
+
+/// `AgentStatus` collapses `crate::detect::AgentState::Idle` into `Done`
+/// (unseen) vs. `Idle` (seen) at the presentation boundary; this undoes that
+/// so `idle_age_for`/`state_icon` (which classify by `AgentState` + seen) can
+/// be called from the client shell, which only has the wire enum.
+fn agent_state_and_seen(
+    status: crate::api::schema::AgentStatus,
+) -> (crate::detect::AgentState, bool) {
+    use crate::api::schema::AgentStatus;
+    use crate::detect::AgentState;
+    match status {
+        AgentStatus::Working => (AgentState::Working, true),
+        AgentStatus::Blocked => (AgentState::Blocked, true),
+        AgentStatus::Done => (AgentState::Idle, false),
+        AgentStatus::Idle => (AgentState::Idle, true),
+        AgentStatus::Unknown => (AgentState::Unknown, true),
+    }
+}
+
+/// Classify how long an agent row has held its state, from the wire's
+/// `state_age_seconds` and the configured stale threshold. Missing age (an
+/// older server, or no state yet) renders as fresh.
+fn agent_idle_age(
+    status: crate::api::schema::AgentStatus,
+    state_age_seconds: Option<u64>,
+    idle_stale_after_seconds: u64,
+) -> crate::ui::IdleAge {
+    let (_, seen) = agent_state_and_seen(status);
+    let elapsed = std::time::Duration::from_secs(state_age_seconds.unwrap_or(0));
+    let threshold = std::time::Duration::from_secs(idle_stale_after_seconds);
+    crate::ui::idle_age_for(seen, elapsed, threshold)
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -354,10 +389,15 @@ pub(super) fn agent_rows(
                 .cloned()
                 .collect::<HashMap<_, _>>();
             let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+            let idle_age = agent_idle_age(
+                agent.agent_status,
+                agent.state_age_seconds,
+                config.idle_stale_after_seconds,
+            );
             let state_text = labels
                 .get(status_text(agent.agent_status))
                 .map(String::as_str)
-                .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
+                .unwrap_or_else(|| sidebar_status_text(agent.agent_status, idle_age));
             let canonical_agent = agent
                 .agent
                 .as_deref()
@@ -388,6 +428,7 @@ pub(super) fn agent_rows(
                 rows,
                 nested,
                 last_child: false,
+                state_age_seconds: agent.state_age_seconds,
             })
         })
         .collect::<Vec<_>>();
@@ -437,10 +478,15 @@ pub(super) fn agent_row(
         .cloned()
         .collect::<HashMap<_, _>>();
     let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let idle_age = agent_idle_age(
+        agent.agent_status,
+        agent.state_age_seconds,
+        config.idle_stale_after_seconds,
+    );
     let state_text = labels
         .get(status_text(agent.agent_status))
         .map(String::as_str)
-        .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
+        .unwrap_or_else(|| sidebar_status_text(agent.agent_status, idle_age));
     let canonical_agent = agent
         .agent
         .as_deref()
@@ -471,6 +517,7 @@ pub(super) fn agent_row(
         rows,
         nested: false,
         last_child: false,
+        state_age_seconds: agent.state_age_seconds,
     })
 }
 
@@ -495,12 +542,18 @@ pub(super) fn render_agent_row(
             .fg(palette.subtext0)
             .add_modifier(Modifier::BOLD)
     };
-    let status_style = Style::default().fg(status_color(row.status, palette));
-    let secondary = Style::default().fg(palette.overlay0);
-    let icon = (
-        status_icon(row.status, config.status_indicators),
-        Style::default().fg(status_color(row.status, palette)),
+    let idle_age = agent_idle_age(
+        row.status,
+        row.state_age_seconds,
+        config.idle_stale_after_seconds,
     );
+    let (state, _seen) = agent_state_and_seen(row.status);
+    let icon = crate::ui::state_icon(state, idle_age, config.status_indicators, palette);
+    let status_style = Style::default().fg(icon
+        .1
+        .fg
+        .unwrap_or_else(|| status_color(row.status, palette)));
+    let secondary = Style::default().fg(palette.overlay0);
     let rows = if row.rows.is_empty() {
         vec![vec![crate::ui::ResolvedToken {
             kind: crate::ui::ResolvedTokenKind::StateIcon,
@@ -564,12 +617,10 @@ fn display_width(text: &str) -> usize {
     unicode_width::UnicodeWidthStr::width(text)
 }
 
-fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str {
-    use crate::api::schema::AgentStatus;
-    match status {
-        AgentStatus::Blocked => "blocked",
-        AgentStatus::Done => "done",
-        AgentStatus::Working => "working",
-        AgentStatus::Idle | AgentStatus::Unknown => "idle",
-    }
+fn sidebar_status_text(
+    status: crate::api::schema::AgentStatus,
+    idle_age: crate::ui::IdleAge,
+) -> &'static str {
+    let (state, _seen) = agent_state_and_seen(status);
+    crate::ui::state_label(state, idle_age)
 }

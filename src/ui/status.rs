@@ -164,11 +164,11 @@ impl IdleAge {
 /// measures it. Takes a caller-supplied `now` so a whole frame classifies
 /// against one instant instead of re-reading the clock per pane.
 ///
-/// Not yet called from production code: rendering moved client-side in v0.9.0
-/// and the wire protocol (`ClientShellAgent`) has no elapsed-time field yet to
-/// drive this from there (see `.local/PORT-0.9.0.md`, "sidebar token/staleness
-/// visualization" gap). Kept, and exercised only by the tests below, so the
-/// classification logic is ready for whoever wires up that follow-up.
+/// Convenience wrapper over `idle_age_for` for a caller holding an `AppState`
+/// directly (e.g. a future server-side render path). The client-shell glyph
+/// wiring (`agent_sidebar::render_agent_row`) calls `idle_age_for` directly
+/// instead, since it only has the elapsed seconds off the wire, not an
+/// `AppState`.
 #[allow(dead_code)]
 pub(crate) fn idle_age_at(
     app: &crate::app::AppState,
@@ -203,9 +203,7 @@ pub(crate) fn idle_age_for(
     }
 }
 
-/// Pending the same client-side wiring as `idle_age_at` above.
-#[allow(dead_code)]
-pub(super) fn state_icon_symbol(
+pub(crate) fn state_icon_symbol(
     state: AgentState,
     age: IdleAge,
     indicator_style: StatusIndicatorStyle,
@@ -228,9 +226,7 @@ pub(super) fn state_icon_symbol(
     }
 }
 
-/// Pending the same client-side wiring as `idle_age_at` above.
-#[allow(dead_code)]
-pub(super) fn state_icon(
+pub(crate) fn state_icon(
     state: AgentState,
     age: IdleAge,
     indicator_style: StatusIndicatorStyle,
@@ -242,9 +238,7 @@ pub(super) fn state_icon(
     )
 }
 
-/// Pending the same client-side wiring as `idle_age_at` above.
-#[allow(dead_code)]
-pub(super) fn state_label(state: AgentState, age: IdleAge) -> &'static str {
+pub(crate) fn state_label(state: AgentState, age: IdleAge) -> &'static str {
     match (state, age) {
         (AgentState::Blocked, _) => "blocked",
         (AgentState::Working, _) => "working",
@@ -256,9 +250,7 @@ pub(super) fn state_label(state: AgentState, age: IdleAge) -> &'static str {
     }
 }
 
-/// Pending the same client-side wiring as `idle_age_at` above.
-#[allow(dead_code)]
-pub(super) fn state_label_color(state: AgentState, age: IdleAge, p: &Palette) -> Color {
+pub(crate) fn state_label_color(state: AgentState, age: IdleAge, p: &Palette) -> Color {
     match (state, age) {
         (AgentState::Blocked, _) => p.red,
         (AgentState::Working, _) => p.yellow,

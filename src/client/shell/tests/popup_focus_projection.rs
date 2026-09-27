@@ -951,6 +951,7 @@ fn sidebar_scrollbars_use_proportional_shared_geometry_and_drag() {
             state_change_seq: index,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: false,
         });
     }

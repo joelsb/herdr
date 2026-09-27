@@ -366,6 +366,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_change_seq: 1,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: true,
         },
         ClientShellAgent {
@@ -382,6 +383,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_change_seq: 2,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: false,
         },
     ];
@@ -456,6 +458,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_change_seq: 10,
             state_labels: Vec::new(),
             tokens: vec![("summary".into(), "review complete".into())],
+            state_age_seconds: None,
             focused: true,
         },
         ClientShellAgent {
@@ -472,6 +475,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_change_seq: 20,
             state_labels: vec![("blocked".into(), "needs input".into())],
             tokens: vec![("summary".into(), "waiting for Can".into())],
+            state_age_seconds: None,
             focused: false,
         },
     ];
@@ -595,6 +599,7 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
         state_change_seq: 1,
         state_labels: Vec::new(),
         tokens: Vec::new(),
+        state_age_seconds: None,
         focused: true,
     }];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -662,6 +667,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_change_seq: 1,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: true,
         },
         ClientShellAgent {
@@ -678,6 +684,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_change_seq: 2,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: false,
         },
         ClientShellAgent {
@@ -694,6 +701,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_change_seq: 3,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: false,
         },
     ];
@@ -768,6 +776,7 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         state_change_seq: 1,
         state_labels: Vec::new(),
         tokens: Vec::new(),
+        state_age_seconds: None,
         focused: true,
     });
     let config =
@@ -1333,6 +1342,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         state_change_seq: 1,
         state_labels: Vec::new(),
         tokens: Vec::new(),
+        state_age_seconds: None,
         focused: false,
     });
     state.set_snapshot(Box::new(projected));
@@ -1495,6 +1505,7 @@ fn reported_subagent_panes_render_indented_under_their_parent() {
         tokens: parent
             .map(|parent| vec![("parent_pane".into(), parent.into())])
             .unwrap_or_default(),
+        state_age_seconds: None,
         focused: pane_id == "pane_1",
     };
     // The children sort ahead of the parent on their own, so a passing run
@@ -1541,5 +1552,59 @@ fn reported_subagent_panes_render_indented_under_their_parent() {
             .map(|(_, pane_id)| pane_id.as_str())
             .collect::<Vec<_>>(),
         vec!["pane_1", "pane_3", "pane_2"]
+    );
+}
+
+#[test]
+fn agent_row_glyph_ages_from_the_wire_state_age_seconds() {
+    // The four idle buckets (FreshUnseen/StaleUnseen/FreshSeen/ParkedSeen, see
+    // FORK.md F4) only render distinct glyphs once the client snapshot carries
+    // elapsed time. This drives the real draw site, `agent_sidebar::render_agent_row`,
+    // with rows differing only by `state_age_seconds` and `agent_status`
+    // (Done = unseen, Idle = seen; see `agent_state_and_seen`), so a
+    // fresh-unseen/stale-unseen pair and a fresh-seen/parked-seen pair must
+    // draw distinct symbols.
+    let mut config = Config::default();
+    config.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+    config.ui.idle_stale_after_seconds = 300;
+    let shell_config = ClientShellConfig::from_config(&config);
+
+    let icon_for = |status: AgentStatus, state_age_seconds: u64| {
+        let row = super::super::agent_sidebar::AgentRow {
+            pane_id: "pane_1".into(),
+            status,
+            focused: false,
+            rows: Vec::new(),
+            nested: false,
+            last_child: false,
+            state_age_seconds: Some(state_age_seconds),
+        };
+        let rect = Rect::new(0, 0, 10, 1);
+        let mut buffer = Buffer::empty(rect);
+        super::super::agent_sidebar::render_agent_row(&mut buffer, rect, &row, &shell_config);
+        // Indent for a top-level, non-nested row is one space (see
+        // `render_agent_row`), so the icon is the second cell.
+        buffer.cell((1, 0)).expect("icon cell").symbol().to_owned()
+    };
+
+    assert_eq!(
+        icon_for(AgentStatus::Done, 10),
+        "✓",
+        "fresh unseen (done) should keep its glyph"
+    );
+    assert_eq!(
+        icon_for(AgentStatus::Done, 3_600),
+        "!",
+        "stale unseen should get the distinct stale glyph"
+    );
+    assert_eq!(
+        icon_for(AgentStatus::Idle, 10),
+        "○",
+        "fresh seen (idle) should keep its glyph"
+    );
+    assert_eq!(
+        icon_for(AgentStatus::Idle, 3_600),
+        "◌",
+        "parked seen should get the distinct parked glyph"
     );
 }

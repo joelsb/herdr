@@ -305,6 +305,7 @@ mod tests {
             state_change_seq: 2,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: true,
         });
         state.set_snapshot(Box::new(snapshot));
@@ -351,6 +352,7 @@ mod tests {
             state_change_seq: 1,
             state_labels: Vec::new(),
             tokens: Vec::new(),
+            state_age_seconds: None,
             focused: false,
         });
         state.set_snapshot(Box::new(snapshot.clone()));
