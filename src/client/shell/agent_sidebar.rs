@@ -10,18 +10,22 @@ use ratatui::{
 
 use super::*;
 
-pub(super) struct AgentRow {
-    pub(super) pane_id: String,
-    pub(super) status: crate::api::schema::AgentStatus,
-    pub(super) focused: bool,
-    pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+// pub(crate), not pub(super): the fork's fork_contract test
+// (`fork_contract_idle_age_glyph_renders_from_wire_state_age_seconds` in
+// `src/fork_contract_tests.rs`) drives `render_agent_row` directly with a
+// synthetic `AgentRow` from outside this module.
+pub(crate) struct AgentRow {
+    pub(crate) pane_id: String,
+    pub(crate) status: crate::api::schema::AgentStatus,
+    pub(crate) focused: bool,
+    pub(crate) rows: Vec<Vec<crate::ui::ResolvedToken>>,
     /// Renders indented under the row above it. See [`nested_agent_pane_ids`].
-    pub(super) nested: bool,
+    pub(crate) nested: bool,
     /// Last child of its parent, so it draws the closing tree corner.
-    pub(super) last_child: bool,
+    pub(crate) last_child: bool,
     /// Seconds this agent's state has held, off the wire. `None` (an older
     /// server, or no agent state yet) renders as fresh: see `idle_age_for`.
-    pub(super) state_age_seconds: Option<u64>,
+    pub(crate) state_age_seconds: Option<u64>,
 }
 
 /// `AgentStatus` collapses `crate::detect::AgentState::Idle` into `Done`
@@ -521,7 +525,7 @@ pub(super) fn agent_row(
     })
 }
 
-pub(super) fn render_agent_row(
+pub(crate) fn render_agent_row(
     buffer: &mut Buffer,
     rect: Rect,
     row: &AgentRow,

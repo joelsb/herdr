@@ -31,7 +31,11 @@ mod image_files;
 mod input;
 mod loop_config;
 mod notifications;
-mod shell;
+// pub(crate), not private: `src/fork_contract_tests.rs` (a crate-root sibling
+// module, see `src/main.rs`) reaches `ClientShellState`/`AgentRow` through
+// this path to drive the idle-aging glyph contract test without duplicating
+// the whole client shell.
+pub(crate) mod shell;
 mod shell_runtime;
 mod startup;
 mod state;

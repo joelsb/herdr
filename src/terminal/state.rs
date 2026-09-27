@@ -2478,51 +2478,10 @@ mod tests {
         assert_eq!(stabilize_agent_detection(detection), AgentState::Idle);
     }
 
-    #[test]
-    fn state_entered_at_tracks_only_real_state_changes() {
-        let mut terminal = test_terminal();
-        let t0 = Instant::now();
-
-        terminal.set_detected_state_with_screen_signals_at(
-            Some(Agent::Pi),
-            AgentState::Idle,
-            false,
-            false,
-            false,
-            false,
-            t0,
-        );
-        assert_eq!(terminal.state, AgentState::Idle);
-        assert_eq!(terminal.state_entered_at(), t0);
-
-        // A repeated report of the same state must not restart the clock: the
-        // idle-staleness buckets measure how long a result has been sitting,
-        // and detection re-reports the same state on every screen scan.
-        let later = t0 + Duration::from_secs(60);
-        terminal.set_detected_state_with_screen_signals_at(
-            Some(Agent::Pi),
-            AgentState::Idle,
-            false,
-            false,
-            false,
-            false,
-            later,
-        );
-        assert_eq!(terminal.state_entered_at(), t0);
-
-        let moved = t0 + Duration::from_secs(90);
-        terminal.set_detected_state_with_screen_signals_at(
-            Some(Agent::Pi),
-            AgentState::Working,
-            false,
-            false,
-            false,
-            false,
-            moved,
-        );
-        assert_eq!(terminal.state, AgentState::Working);
-        assert_eq!(terminal.state_entered_at(), moved);
-    }
+    // `state_entered_at_tracks_only_real_state_changes` moved to
+    // `fork_contract_tests.rs` as `fork_contract_state_entered_at_tracks_only_real_state_changes`
+    // (fork-owned, see FORK.md F4) - `set_detected_state_with_screen_signals_at`
+    // and `state_entered_at` are already `pub`.
 
     #[test]
     fn clearing_runtime_identity_resets_state_entered_at() {
@@ -2697,69 +2656,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn jcode_resume_reanchors_full_lifecycle_authority() {
-        // `jc --resume <id>` fires session_start twice: once as `create` for
-        // the session object the process starts with, then again as `resume`
-        // for the session actually restored. Without replacement the pane
-        // stays anchored to the throwaway id and every later report is
-        // dropped, leaving the pane stuck at its first state.
-        let mut terminal = test_terminal();
-        terminal.set_detected_state(Some(Agent::Jcode), AgentState::Idle);
-        let created = crate::agent_resume::AgentSessionRef::id("session_created").unwrap();
-        let resumed = crate::agent_resume::AgentSessionRef::id("session_resumed").unwrap();
-
-        assert!(
-            terminal
-                .set_agent_session_ref_for_session_start(
-                    "herdr:jcode".into(),
-                    "jcode".into(),
-                    Some(created.clone()),
-                    Some(10),
-                    Some("new".into()),
-                )
-                .is_some(),
-            "jcode should anchor the session it starts with"
-        );
-        assert!(terminal
-            .set_hook_authority_with_session_ref(
-                "herdr:jcode".into(),
-                "jcode".into(),
-                AgentState::Working,
-                None,
-                Some(created),
-                Some(11),
-            )
-            .is_some());
-
-        assert!(
-            terminal
-                .set_agent_session_ref_for_session_start(
-                    "herdr:jcode".into(),
-                    "jcode".into(),
-                    Some(resumed.clone()),
-                    Some(12),
-                    Some("resume".into()),
-                )
-                .is_some(),
-            "a resumed jcode session must replace the session it started with"
-        );
-
-        assert!(
-            terminal
-                .set_hook_authority_with_session_ref(
-                    "herdr:jcode".into(),
-                    "jcode".into(),
-                    AgentState::Idle,
-                    None,
-                    Some(resumed),
-                    Some(13),
-                )
-                .is_some(),
-            "state from the resumed jcode session must apply"
-        );
-        assert_eq!(terminal.state, AgentState::Idle);
-    }
+    // `jcode_resume_reanchors_full_lifecycle_authority` moved to
+    // `fork_contract_tests.rs` as `fork_contract_jcode_resume_reanchors_full_lifecycle_authority`
+    // (fork-owned, see FORK.md F1) - every symbol it needed
+    // (`set_agent_session_ref_for_session_start`, `set_hook_authority_with_session_ref`,
+    // `TerminalState::new`) is already `pub`.
 
     #[test]
     fn session_identity_claims_leave_state_to_detection() {

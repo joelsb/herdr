@@ -53,24 +53,11 @@ impl PaneState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
-    #[test]
-    fn mark_seen_advances_the_look_clock_every_time() {
-        let mut pane = PaneState::new(TerminalId::alloc());
-        let t0 = Instant::now();
-
-        pane.seen = false;
-        pane.seen_at = t0;
-        assert!(pane.mark_seen(t0 + Duration::from_secs(10)));
-        assert!(pane.seen);
-        assert_eq!(pane.seen_at, t0 + Duration::from_secs(10));
-
-        // Re-focusing an already-seen pane is still a look, so the clock has to
-        // move: otherwise a pane you keep checking would still go parked.
-        assert!(!pane.mark_seen(t0 + Duration::from_secs(20)));
-        assert_eq!(pane.seen_at, t0 + Duration::from_secs(20));
-    }
+    // `mark_seen_advances_the_look_clock_every_time` moved to
+    // `fork_contract_tests.rs` as `fork_contract_mark_seen_advances_the_look_clock_every_time`
+    // (fork-owned, see FORK.md F4) - `PaneState::new`, `mark_seen`, `seen`,
+    // `seen_at` are already `pub`.
 
     #[test]
     fn mark_seen_rearms_the_unread_alert() {

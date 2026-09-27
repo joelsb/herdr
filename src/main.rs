@@ -23,6 +23,12 @@ mod config;
 mod copy_mode;
 mod detect;
 mod events;
+// Fork contract tests: see the module doc comment in `src/fork_contract_tests.rs`
+// and `tests/fork_contract.rs`. `cargo nextest run fork_contract` runs exactly
+// this set (both files, by the shared `fork_contract_` test-name prefix).
+#[cfg(test)]
+#[path = "fork_contract_tests.rs"]
+mod fork_contract_tests;
 use ghostty_vt as ghostty;
 mod handoff_runtime;
 mod input;

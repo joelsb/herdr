@@ -41,6 +41,11 @@ use word_selection::ClientWordSelection;
 
 pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;
+// Fork contract test surface only: `src/fork_contract_tests.rs` drives
+// `render_agent_row` directly with a synthetic `AgentRow` to prove the
+// idle-aging glyphs (FORK.md F4) actually reach the drawn row.
+#[cfg(test)]
+pub(crate) use agent_sidebar::{render_agent_row, AgentRow};
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;
 pub(super) use surface_patch::{ClientComposedSurfacePatch, ClientPaneSurfacePatchOutcome};

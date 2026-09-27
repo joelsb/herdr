@@ -1058,12 +1058,9 @@ mod tests {
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
     }
 
-    #[test]
-    fn jcode_is_hook_authority_without_screen_manifest() {
-        assert!(full_lifecycle_hook_authority("herdr:jcode", "jcode"));
-        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Jcode));
-        assert_eq!(identify_agent("jcode"), Some(Agent::Jcode));
-    }
+    // `jcode_is_hook_authority_without_screen_manifest` moved to
+    // `fork_contract_tests.rs` as `fork_contract_jcode_is_hook_authority_without_screen_manifest`
+    // (fork-owned, see FORK.md F1) - all its symbols were already crate-visible.
 
     #[test]
     fn session_identity_integrations_leave_state_to_screen_detection() {
