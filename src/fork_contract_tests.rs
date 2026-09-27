@@ -287,6 +287,46 @@ mod tests {
         assert_eq!(terminal.state, crate::detect::AgentState::Idle);
     }
 
+    /// FORK.md F1: `herdr:jcode` is an official source, so a pane running
+    /// jcode must restore as `jcode --resume <id>` after a server restart,
+    /// not a bare shell, and an unofficial source reporting the same agent
+    /// must be refused. Drives the same function
+    /// (`crate::persist::restore_plan_for_snapshot`) the server calls on
+    /// restart. Moved from `src/persist/restore.rs` (upstream-owned - a merge
+    /// there could silently delete this hunk and take the feature's only
+    /// guard with it); see the "moved to" comment left in its place.
+    #[test]
+    fn fork_contract_restore_plan_resumes_a_jcode_session() {
+        use crate::persist::{restore_plan_for_snapshot, PaneAgentSessionSnapshot};
+
+        let session = PaneAgentSessionSnapshot {
+            source: "herdr:jcode".into(),
+            agent: "jcode".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session_goat_1787603691782_ec789f4bf85ebc01".into(),
+        };
+
+        assert!(restore_plan_for_snapshot(&session, false).is_none());
+        assert_eq!(
+            restore_plan_for_snapshot(&session, true).unwrap().argv,
+            vec![
+                "jcode",
+                "--resume",
+                "session_goat_1787603691782_ec789f4bf85ebc01"
+            ]
+        );
+
+        // An unofficial source reporting the same agent must still be refused,
+        // otherwise any process could make herdr launch a command on restart.
+        let unofficial = PaneAgentSessionSnapshot {
+            source: "custom:jcode".into(),
+            agent: "jcode".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session_goat_1787603691782_ec789f4bf85ebc01".into(),
+        };
+        assert!(restore_plan_for_snapshot(&unofficial, true).is_none());
+    }
+
     // -----------------------------------------------------------------
     // FORK.md F2 - close_pane_if_idle
     // -----------------------------------------------------------------

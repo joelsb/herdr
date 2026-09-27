@@ -830,7 +830,11 @@ fn pane_restore_startup<'a>(
     }
 }
 
-fn restore_plan_for_snapshot(
+// pub(crate), not private: the fork's fork_contract test
+// (`fork_contract_restore_plan_resumes_a_jcode_session` in
+// `src/fork_contract_tests.rs`) calls this directly from outside this
+// upstream-owned module, re-exported via `#[cfg(test)]` in `src/persist.rs`.
+pub(crate) fn restore_plan_for_snapshot(
     session: &PaneAgentSessionSnapshot,
     resume_agents_on_restore: bool,
 ) -> Option<crate::agent_resume::AgentResumePlan> {
@@ -1083,38 +1087,12 @@ mod tests {
         assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
     }
 
-    #[test]
-    fn restore_plan_resumes_a_jcode_session_after_a_server_restart() {
-        // The whole point of making jcode an official source: a pane that was
-        // running jcode must come back running the same jcode session, not a
-        // bare shell. Drives the same function the server calls on restart.
-        let session = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "herdr:jcode".into(),
-            agent: "jcode".into(),
-            kind: crate::agent_resume::AgentSessionRefKind::Id,
-            value: "session_goat_1787603691782_ec789f4bf85ebc01".into(),
-        };
-
-        assert!(restore_plan_for_snapshot(&session, false).is_none());
-        assert_eq!(
-            restore_plan_for_snapshot(&session, true).unwrap().argv,
-            vec![
-                "jcode",
-                "--resume",
-                "session_goat_1787603691782_ec789f4bf85ebc01"
-            ]
-        );
-
-        // An unofficial source reporting the same agent must still be refused,
-        // otherwise any process could make herdr launch a command on restart.
-        let unofficial = super::super::snapshot::PaneAgentSessionSnapshot {
-            source: "custom:jcode".into(),
-            agent: "jcode".into(),
-            kind: crate::agent_resume::AgentSessionRefKind::Id,
-            value: "session_goat_1787603691782_ec789f4bf85ebc01".into(),
-        };
-        assert!(restore_plan_for_snapshot(&unofficial, true).is_none());
-    }
+    // `restore_plan_resumes_a_jcode_session_after_a_server_restart` moved to
+    // `src/fork_contract_tests.rs` as
+    // `fork_contract_restore_plan_resumes_a_jcode_session`: this is the
+    // fork's F1 assertion that a jcode pane restores as `jcode --resume
+    // <id>`, and this file is upstream-owned, so a merge deleting a hunk
+    // here would silently take the feature's only guard with it.
 
     #[test]
     fn restore_plan_selection_suppresses_duplicates() {
