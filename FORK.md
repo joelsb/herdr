@@ -170,6 +170,7 @@ Two consequences a future port must honour: never carry this re-bless upstream, 
 
 - `docs/next/known-issues/stale-herdr-pane-id-agent-status.md` - a pane's public id changes but the agent's baked-in `HERDR_PANE_ID` does not, so it reports to a pane it no longer occupies. Diagnosed, fix deferred.
 - `docs/next/known-issues/pane-silently-rejects-agent-reports.md` - untracked in git; a suppression latch rejecting every report on one pane whose address is correct. Read it before confusing the two.
+- `docs/findings/2026-09-27-debug-vt-lib-burns-a-core.md` - the installed binary built with the vt lib at `Debug` burned 64% of a core and queued every keystroke behind a page integrity check. Read it before rebuilding or reinstalling `~/.local/bin/herdr`.
 - `AGENTS.md` - the "installing a tool or plugin" rule and the pointer to this file.
 - `.agents/skills/herdr-throwaway-repro/SKILL.md` - `-u HERDR_ENV` is required in the launch command, or the nested session refuses to start.
 - Code comments in `src/ui/sidebar.rs` still point at `.local/PORT-0.9.0.md`, which is gitignored and no longer on disk. Dangling; this file carries what mattered.
@@ -206,6 +207,20 @@ chmod +x /var/tmp/xcrun-shim/xcrun
 - **Zig 0.16.0.** Upstream `fff6c820` extracted the libghostty-vt binding into `crates/ghostty-vt` and raised the vendored minimum from 0.15.2 to 0.16.0. The zig on `PATH` here is still 0.15.2 and `build.rs` panics with `Building Herdr requires Zig 0.16.0`; Homebrew's 0.16.0 at `/opt/homebrew/bin/zig` satisfies it through the `ZIG` env var, with no patch to `build.rs`.
 
 `cargo fmt --check` and parts of `cargo nextest run` pass without either override, which is what makes a missing shim confusing. The maintenance Python suites need python3.12 (`tomllib`); system `python3` is 3.9.
+
+### The binary you install must have the vt lib at ReleaseFast
+
+`build.rs:54` defaults `LIBGHOSTTY_VT_OPTIMIZE` to `ReleaseFast`, independently of the cargo profile - a cargo `--debug` build still gets a correct vt lib. Override it to `Debug` and the binary is unusable as a daily driver: `Screen.clearCells` then calls `Page.verifyIntegrity` on every `erase line`, which walks the whole page and builds two hashmaps while holding the pane's terminal mutex. Measured on the Sep 10 build: **64% of a core sustained** and every keystroke queued behind the check. Full diagnosis in `docs/findings/2026-09-27-debug-vt-lib-burns-a-core.md`.
+
+Check any binary on disk before installing it. No running server and no load needed:
+
+```bash
+otool -tvV ~/.local/bin/herdr \
+  | awk '/^_?terminal\.Screen\.clearCells/{f=1} f&&/^[a-zA-Z_]/&&!/clearCells/{f=0} f&&/bl\t/{print $NF}' \
+  | sort -u | grep -ci integrity
+```
+
+`0` is a good binary. `2` is the bug, whatever the version string says. Do not verify this with `sample` on a running server: an idle server, or the wrong PID out of several, answers `0` regardless.
 
 ---
 
