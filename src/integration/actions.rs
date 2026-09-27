@@ -8,8 +8,8 @@ use super::targets::{
     install_qodercli, install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex,
     uninstall_copilot, uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok,
     uninstall_hermes, uninstall_jcode, uninstall_kilo, uninstall_kimi, uninstall_letta,
-    uninstall_mastracode, uninstall_omp,
-    uninstall_opencode, uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    uninstall_mastracode, uninstall_omp, uninstall_opencode, uninstall_pi, uninstall_qodercli,
+    uninstall_qwen,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};

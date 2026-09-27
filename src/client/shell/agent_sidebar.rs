@@ -460,6 +460,7 @@ pub(super) fn agent_row(
             terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
             canonical_agent,
             tokens: &tokens,
+            nested: false,
         },
         state_text,
     );
