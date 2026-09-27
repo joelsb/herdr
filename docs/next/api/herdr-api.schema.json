@@ -799,6 +799,15 @@
                 "null"
               ]
             },
+            "idle_age_seconds": {
+              "description": "Seconds since the clock the two-clock idle-aging rule uses: the state\nclock (`state_age_seconds`) while unread, the last-look clock once\nseen. A client must classify idle-aging buckets from this field, not\n`state_age_seconds`, or a seen pane ages from the wrong clock and\ndisagrees with the server-side stale/parked alert. See\n`crate::workspace::pane_aged_from`. Absent for a pane with no agent\nstate worth aging.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "label": {
               "type": [
                 "string",
@@ -6581,6 +6590,15 @@
                 "null"
               ]
             },
+            "idle_age_seconds": {
+              "description": "The two-clock idle-aging elapsed time; see `PaneInfo::idle_age_seconds`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "interactive_ready": {
               "type": "boolean"
             },
@@ -7904,6 +7922,15 @@
             "foreground_cwd": {
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "idle_age_seconds": {
+              "description": "Seconds since the clock the two-clock idle-aging rule uses: the state\nclock (`state_age_seconds`) while unread, the last-look clock once\nseen. A client must classify idle-aging buckets from this field, not\n`state_age_seconds`, or a seen pane ages from the wrong clock and\ndisagrees with the server-side stale/parked alert. See\n`crate::workspace::pane_aged_from`. Absent for a pane with no agent\nstate worth aging.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
                 "null"
               ]
             },

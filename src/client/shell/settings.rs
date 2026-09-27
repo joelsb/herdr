@@ -48,7 +48,11 @@ pub(super) fn integration_needs_install(info: &crate::api::schema::IntegrationIn
 }
 
 impl ClientShellState {
-    pub(super) fn open_settings_overlay(&mut self) {
+    // pub(crate), not pub(super): the fork's fork_contract test
+    // (`fork_contract_idle_stale_settings_section_offers_all_four_thresholds`
+    // in `src/fork_contract_tests.rs`) opens the real settings overlay from
+    // outside this upstream-owned module.
+    pub(crate) fn open_settings_overlay(&mut self) {
         self.overlay = Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
             section: ClientSettingsSection::Theme,
             selected: theme_index(&self.config.theme_name),

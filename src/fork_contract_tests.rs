@@ -993,4 +993,225 @@ mod tests {
         assert_eq!(row_of("└─ child-a"), parent + 2, "{lines:#?}");
         assert!(lines[parent + 1].starts_with("   ├─ "), "{lines:#?}");
     }
+
+    /// A minimal composed sidebar fixture: one workspace, one tab, one pane,
+    /// no agents. Enough to render both sidebar headers and the workspace
+    /// footer without the nesting test's extra agent rows getting in the way.
+    fn minimal_sidebar_snapshot() -> crate::protocol::ClientShellSnapshot {
+        use crate::protocol::{
+            ClientShellPane, ClientShellSnapshot, ClientShellTab, ClientShellWorkspace,
+        };
+        ClientShellSnapshot {
+            boot_id: "boot-1".into(),
+            revision: 1,
+            config_diagnostic: None,
+            product_announcement: None,
+            update_available: None,
+            update_install_command: "herdr update".into(),
+            server_keybindings_toml: None,
+            latest_release_notes_available: false,
+            integration_updates_available: false,
+            worktree_directory: "/tmp/herdr-worktrees".into(),
+            release_notes: None,
+            focused_workspace_id: Some("ws_1".into()),
+            focused_tab_id: Some("tab_1".into()),
+            focused_pane_id: Some("pane_1".into()),
+            tab_bar_right: Vec::new(),
+            tab_bar_right_separator: " ".into(),
+            agent_view_label: None,
+            agent_order: Vec::new(),
+            workspaces: vec![ClientShellWorkspace {
+                workspace_id: "ws_1".into(),
+                active_tab_id: "tab_1".into(),
+                new_workspace_cwd: "/repo".into(),
+                number: 1,
+                label: "client-shell".into(),
+                custom_label: false,
+                branch: Some("main".into()),
+                git_ahead_behind: None,
+                tokens: Vec::new(),
+                worktree: None,
+                focused: true,
+                agent_status: crate::api::schema::AgentStatus::Idle,
+            }],
+            tabs: vec![ClientShellTab {
+                tab_id: "tab_1".into(),
+                workspace_id: "ws_1".into(),
+                number: 1,
+                label: "1".into(),
+                custom_label: false,
+                zoomed: false,
+                focused: true,
+                agent_status: crate::api::schema::AgentStatus::Idle,
+            }],
+            panes: vec![ClientShellPane {
+                pane_id: "pane_1".into(),
+                workspace_id: "ws_1".into(),
+                tab_id: "tab_1".into(),
+                label: None,
+                cwd: Some("/repo".into()),
+                foreground_cwd: Some("/repo".into()),
+                focused: true,
+                right_click_passthrough: false,
+            }],
+            agents: Vec::new(),
+            commands: Vec::new(),
+        }
+    }
+
+    fn minimal_client_shell_state() -> crate::client::shell::ClientShellState {
+        let mut state = crate::client::shell::ClientShellState::new(
+            crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
+        );
+        state.set_snapshot(Box::new(minimal_sidebar_snapshot()));
+
+        let surface_buffer = ratatui::buffer::Buffer::with_lines(["LIVE", "PANE"]);
+        state.set_pane_surface(crate::protocol::PaneSurfaceFrame {
+            boot_id: "boot-1".into(),
+            projection_revision: 1,
+            surface_revision: 1,
+            frame: crate::protocol::FrameData::from_ratatui_buffer_with_hyperlinks(
+                &surface_buffer,
+                Some(crate::protocol::CursorState {
+                    x: 1,
+                    y: 1,
+                    visible: true,
+                    shape: 2,
+                }),
+                &[],
+            ),
+            panes: vec![crate::protocol::PaneSurfacePane {
+                pane_id: "pane_1".into(),
+                content_revision: 0,
+                rect: crate::protocol::SurfaceRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 2,
+                },
+                inner_rect: crate::protocol::SurfaceRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 2,
+                },
+                scrollbar_rect: None,
+                scroll: None,
+                focused: true,
+                mouse_reporting: false,
+                sgr_pixel_mouse: false,
+                alternate_screen_active: false,
+                pixel_width: 0,
+                pixel_height: 0,
+            }],
+            splits: Vec::new(),
+            popup: None,
+            graphics: crate::protocol::SurfaceGraphicsScene::default(),
+        });
+        state
+    }
+
+    fn compose_minimal_sidebar_lines_from(
+        state: &mut crate::client::shell::ClientShellState,
+        cols: u16,
+        rows: u16,
+    ) -> Vec<String> {
+        let frame = state.compose(cols, rows).expect("sidebar frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn compose_minimal_sidebar_lines(cols: u16, rows: u16) -> Vec<String> {
+        let mut state = minimal_client_shell_state();
+        compose_minimal_sidebar_lines_from(&mut state, cols, rows)
+    }
+
+    /// FORK.md F5: the agents section renders above the spaces section - the
+    /// feature's whole point ("the agents list is what gets looked at; it
+    /// belongs on top"). The only existing assertion of this
+    /// (`expanded_sidebar_sections_puts_the_agent_detail_section_on_top` in
+    /// upstream-owned `src/ui/sidebar.rs`) checks the layout function's
+    /// returned rects, which still passes if a reorder in the *drawn* sidebar
+    /// put spaces on top while the rects stayed named correctly. This reads
+    /// the actual composed frame and requires the " agents" header row to
+    /// come before the " spaces" header row. If this goes red, the sidebar
+    /// draws spaces above agents again.
+    #[test]
+    fn fork_contract_sidebar_renders_agents_header_above_spaces_header() {
+        let lines = compose_minimal_sidebar_lines(106, 30);
+        let row_of = |needle: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing from {lines:#?}"))
+        };
+        let agents_header = row_of(" agents");
+        let spaces_header = row_of(" spaces");
+        assert!(
+            agents_header < spaces_header,
+            "agents header (row {agents_header}) must render above spaces header (row {spaces_header}): {lines:#?}"
+        );
+    }
+
+    /// FORK.md F5: putting spaces at the bottom of the sidebar means the
+    /// spaces section's footer (`new`/`menu`) always ends flush with the
+    /// sidebar's last row - which is also where the fixed collapse-toggle
+    /// glyph always draws (`area.bottom() - 1`) - so the footer clamp
+    /// (`.min(area.bottom().saturating_sub(2))` in
+    /// `src/client/shell/sidebar.rs`) is load-bearing on every render, not an
+    /// edge case. Nothing failed if it were deleted: no test asserted the
+    /// drawn rows. If this goes red, `new`/`menu` collide with the collapse
+    /// toggle on the sidebar's last row again.
+    #[test]
+    fn fork_contract_sidebar_footer_clamp_keeps_new_off_the_collapse_toggle_row() {
+        let lines = compose_minimal_sidebar_lines(106, 30);
+        let last_row = lines.len() - 1;
+        let footer_row = lines
+            .iter()
+            .position(|line| line.contains(" new"))
+            .unwrap_or_else(|| panic!("' new' footer missing from {lines:#?}"));
+        assert!(
+            footer_row < last_row,
+            "the workspace footer (row {footer_row}) must not sit on the sidebar's last row \
+             (row {last_row}), which the collapse-toggle glyph always occupies: {lines:#?}"
+        );
+        assert!(
+            !lines[last_row].contains(" new"),
+            "the collapse-toggle row must not also carry the 'new' footer text: {lines:#?}"
+        );
+    }
+
+    /// FORK.md F4: the idle-aging settings section (`ClientSettingsSection::IdleStale`)
+    /// is registered in the real settings overlay and offers all four
+    /// `IDLE_STALE_CHOICES` thresholds. The review's verification found that
+    /// deleting the section is caught today only by an unrelated upstream
+    /// test that hardcodes a tab count, not by any fork assertion. Drives the
+    /// real key path: `ClientShellState::handle_input_bytes` navigating
+    /// settings sections with Tab, exactly as a user's terminal would, then
+    /// reads the drawn choice list off the composed frame. If this goes red,
+    /// either the section is gone from the settings screen or it no longer
+    /// offers all four thresholds.
+    #[test]
+    fn fork_contract_idle_stale_settings_section_offers_all_four_thresholds() {
+        let mut state = minimal_client_shell_state();
+        state.open_settings_overlay();
+        // Theme -> Indicators -> IdleStale: two real Tab keystrokes, the same
+        // input `route_settings_key` classifies from a live terminal.
+        state.handle_input_bytes(b"\t\t");
+
+        let lines = compose_minimal_sidebar_lines_from(&mut state, 106, 30);
+        for (label, _seconds) in crate::config::IDLE_STALE_CHOICES {
+            assert!(
+                lines.iter().any(|line| line.contains(label)),
+                "idle-stale settings section must offer {label:?}: {lines:#?}"
+            );
+        }
+    }
 }
