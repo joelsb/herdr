@@ -123,7 +123,7 @@ pub(crate) fn agent_rows(
                     }?;
                     let style = kind
                         .text_value()
-                        .map_or(style, |value| configured.style_for_value(value));
+                        .map_or(Some(style), |value| configured.style_for_value(value))?;
                     Some(ResolvedToken::new(kind, style))
                 })
                 .collect::<Vec<_>>();
@@ -179,7 +179,7 @@ pub(crate) fn space_rows(
                     }?;
                     let style = kind
                         .text_value()
-                        .map_or(style, |value| configured.style_for_value(value));
+                        .map_or(Some(style), |value| configured.style_for_value(value))?;
                     Some(ResolvedToken::new(kind, style))
                 })
                 .collect::<Vec<_>>();
@@ -388,6 +388,67 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
     // `AgentPanelEntry`-shaped context, which no longer exists (`AgentTokenContext`
     // carries no `nested` flag). Nesting itself (grouping + indentation) is
     // covered separately in `src/ui/sidebar.rs`'s tests.
+
+    #[test]
+    fn conditional_hide_removes_tokens_and_empty_rows() {
+        let config: crate::config::SidebarConfig = toml::from_str(
+            r##"
+[agents]
+rows = [[{ token = "machine", fg = "#61afef", rules = [{ equals = "Local", hide = true }] }, "agent"]]
+[agents.rows_by_agent]
+pi = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["agent"]]
+[spaces]
+rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]]
+"##,
+        ).unwrap();
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(encoded.contains("hide = true"));
+        let config: crate::config::SidebarConfig = toml::from_str(&encoded).unwrap();
+        let mut entry = entry();
+        entry.canonical_agent = None;
+        for (machine, count) in [("Local", 1), ("Remote", 2)] {
+            let mut ctx = context(&entry);
+            ctx.machine = Some(machine);
+            let rows = agent_rows(&config.agents, ctx, "working");
+            assert_eq!(rows[0].len(), count);
+            assert_eq!(
+                rows[0].last().unwrap().kind,
+                ResolvedTokenKind::Agent("pi".into())
+            );
+        }
+        entry.canonical_agent = Some(crate::detect::Agent::Pi);
+        for (value, count) in [("20", 1), ("90", 2)] {
+            entry.tokens.insert("load".into(), value.into());
+            assert_eq!(
+                agent_rows(&config.agents, context(&entry), "working").len(),
+                count
+            );
+            let rows = space_rows(
+                &config.spaces,
+                SpaceTokenContext {
+                    workspace: "repo",
+                    branch: None,
+                    state_text: "working",
+                    ahead_behind: None,
+                    suppress_git_details: false,
+                    tokens: &entry.tokens,
+                },
+            );
+            assert_eq!(rows.len(), count);
+        }
+    }
+
+    #[test]
+    fn conditional_hide_preserves_first_match_wins() {
+        for first in ["hide = false", "bold = true"] {
+            let config: AgentsSidebarConfig = toml::from_str(&format!(
+                "rows = [[{{ token = 'agent', rules = [{{ equals = 'pi', {first} }}, {{ contains = '', hide = true }}] }}]]"
+            )).unwrap();
+            let entry = entry();
+            let rows = agent_rows(&config, context(&entry), "working");
+            assert_eq!(rows[0][0].kind, ResolvedTokenKind::Agent("pi".into()));
+        }
+    }
 
     #[test]
     fn missing_custom_tokens_elide_rows_and_separators() {

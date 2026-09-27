@@ -50,6 +50,33 @@ Use `/var/tmp` or a dedicated reproduction directory as the new pane's cwd. Save
 
 Choose a short unique name such as `repro-<topic>-<timestamp>`.
 
+Before launching, explicitly allow nesting in the configuration the disposable
+client will actually load. `HERDR_ENV=1` is inherited from the outer pane, so the
+launch is otherwise rejected unless `[experimental].allow_nested` is enabled.
+An isolated `XDG_CONFIG_HOME` does not inherit this setting from the user's global
+config, even when nesting is enabled there.
+
+Create a test-only config under the reproduction directory using the file-writing
+tool. For a default-config reproduction, its contents can be:
+
+```toml
+[experimental]
+allow_nested = true
+```
+
+If reproducing with the user's configuration, copy that configuration into the
+test directory and enable `allow_nested` in its existing `[experimental]` table
+(or add the table if absent). Do not create duplicate tables or keys. Never edit
+the user's global configuration to permit a reproduction, and do not unset
+`HERDR_ENV` to bypass the nesting check.
+
+Pass the absolute test config path as `HERDR_CONFIG_PATH` when launching below.
+Use the same override for config validation and any commands that must load the
+test config. This override selects a config file; it does not isolate the saved
+machine catalog or other global state. Use test-only `XDG_CONFIG_HOME` and
+`XDG_STATE_HOME` as well when the reproduction changes saved machines, and retain
+those overrides on every command addressing that test environment.
+
 Run the named session inside the new outer pane. Clear inherited session selection, socket overrides, and caller IDs so the nested runtime cannot accidentally address the parent session:
 
 ```bash
@@ -61,12 +88,18 @@ env \
   -u HERDR_WORKSPACE_ID \
   -u HERDR_TAB_ID \
   -u HERDR_PANE_ID \
+  HERDR_CONFIG_PATH=<absolute-test-config-path> \
   herdr --session <session-name>
 ```
 
 `-u HERDR_ENV` is required, not optional. Without it the nested session exits immediately with `error: nested herdr is disabled by default.` and a Jurassic Park quote, because `should_block_nested_for_env` (`src/main.rs`) blocks whenever `experimental.allow_nested` is false and the inherited `HERDR_ENV` is `1`. Clearing the variable satisfies the gate per-launch; do NOT set `experimental.allow_nested` in the shared config to get past it. Verified 2026-09-09 against herdr 0.9.0, where the documented command without `-u HERDR_ENV` produced exactly that error and no session.
 
 Add reproduction-specific environment variables to this launch command when needed. Environment variables that configure the server must be present before the named server starts.
+
+Validate the test config with `herdr config check` using the same config override
+before launch. After launch, read the outer pane to catch startup errors such as
+`nested herdr is disabled by default`; do not assume the launch succeeded merely
+because `pane run` returned successfully.
 
 Do not continue until the named session's API is ready. Confirm readiness by addressing that session from the parent and listing its panes.
 
