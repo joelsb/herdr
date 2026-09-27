@@ -318,3 +318,7 @@ So in the same piece of work, also:
 4. Run `bash ~/MYNE/Projects/tools/scripts/tools-status.sh` and require `ok`.
 
 A tool installed but absent from `TOOLS.md` is invisible to the next session, which is how a plugin gets reinstalled, or debugged with no source to read. The full rules for that registry live in `~/MYNE/Projects/tools/AGENTS.md`.
+
+## Local machine: fork features (Joel's checkout only)
+
+This checkout is the fork `joelsb/herdr`: upstream `herdrdev/herdr` plus local features (jcode integration, `close_pane_if_idle`, idle aging, agents-above-spaces and subagent nesting). Read `FORK.md` (`~/MYNE/Projects/tools/herdr/FORK.md`) before merging or rebasing onto a newer upstream and before touching any of those features; it carries each feature's mechanism, its verification command, the conflict it causes on merge, and the `xcrun` shim without which nothing compiles on this Mac. After an upstream merge, prove each feature still reachable rather than present - the v0.9.0 port kept nesting's data and dropped its rendering - and update the ground-truth table in `FORK.md` in the same commit.
