@@ -470,6 +470,15 @@ pub struct PaneInfo {
     /// no agent state worth aging.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_age_seconds: Option<u64>,
+    /// Seconds since the clock the two-clock idle-aging rule uses: the state
+    /// clock (`state_age_seconds`) while unread, the last-look clock once
+    /// seen. A client must classify idle-aging buckets from this field, not
+    /// `state_age_seconds`, or a seen pane ages from the wrong clock and
+    /// disagrees with the server-side stale/parked alert. See
+    /// `crate::workspace::pane_aged_from`. Absent for a pane with no agent
+    /// state worth aging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

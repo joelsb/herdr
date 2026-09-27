@@ -37,6 +37,7 @@ fn agent(
         state_labels: Vec::new(),
         tokens: Vec::new(),
         state_age_seconds: None,
+        idle_age_seconds: None,
         focused: true,
     }
 }
@@ -128,6 +129,7 @@ fn state_with_scrollable_agents() -> (ClientShellState, ClientEndpointId) {
             .map(|index| ClientShellAgent {
                 pane_id: format!("pane_{}", index + 1),
                 state_age_seconds: None,
+                idle_age_seconds: None,
                 focused: index == 0,
                 ..agent(&format!("agent {index}"), AgentStatus::Idle, 1)
             })
@@ -1170,6 +1172,7 @@ fn current_workspace_or_blocked_keeps_foreign_attention_only() {
             name: Some("remote blocked".into()),
             agent_status: AgentStatus::Blocked,
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: false,
             ..agent("remote blocked", AgentStatus::Blocked, 2)
         },

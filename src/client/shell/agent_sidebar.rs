@@ -23,9 +23,10 @@ pub(crate) struct AgentRow {
     pub(crate) nested: bool,
     /// Last child of its parent, so it draws the closing tree corner.
     pub(crate) last_child: bool,
-    /// Seconds this agent's state has held, off the wire. `None` (an older
-    /// server, or no agent state yet) renders as fresh: see `idle_age_for`.
-    pub(crate) state_age_seconds: Option<u64>,
+    /// Seconds since the two-clock idle-aging rule's clock, off the wire.
+    /// `None` (an older server, or no agent state yet) renders as fresh:
+    /// see `idle_age_for`.
+    pub(crate) idle_age_seconds: Option<u64>,
 }
 
 /// `AgentStatus` collapses `crate::detect::AgentState::Idle` into `Done`
@@ -51,11 +52,11 @@ fn agent_state_and_seen(
 /// older server, or no state yet) renders as fresh.
 fn agent_idle_age(
     status: crate::api::schema::AgentStatus,
-    state_age_seconds: Option<u64>,
+    idle_age_seconds: Option<u64>,
     idle_stale_after_seconds: u64,
 ) -> crate::ui::IdleAge {
     let (_, seen) = agent_state_and_seen(status);
-    let elapsed = std::time::Duration::from_secs(state_age_seconds.unwrap_or(0));
+    let elapsed = std::time::Duration::from_secs(idle_age_seconds.unwrap_or(0));
     let threshold = std::time::Duration::from_secs(idle_stale_after_seconds);
     crate::ui::idle_age_for(seen, elapsed, threshold)
 }
@@ -395,7 +396,7 @@ pub(super) fn agent_rows(
             let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
             let idle_age = agent_idle_age(
                 agent.agent_status,
-                agent.state_age_seconds,
+                agent.idle_age_seconds,
                 config.idle_stale_after_seconds,
             );
             let state_text = labels
@@ -432,7 +433,7 @@ pub(super) fn agent_rows(
                 rows,
                 nested,
                 last_child: false,
-                state_age_seconds: agent.state_age_seconds,
+                idle_age_seconds: agent.idle_age_seconds,
             })
         })
         .collect::<Vec<_>>();
@@ -484,7 +485,7 @@ pub(super) fn agent_row(
     let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
     let idle_age = agent_idle_age(
         agent.agent_status,
-        agent.state_age_seconds,
+        agent.idle_age_seconds,
         config.idle_stale_after_seconds,
     );
     let state_text = labels
@@ -521,7 +522,7 @@ pub(super) fn agent_row(
         rows,
         nested: false,
         last_child: false,
-        state_age_seconds: agent.state_age_seconds,
+        idle_age_seconds: agent.idle_age_seconds,
     })
 }
 
@@ -548,7 +549,7 @@ pub(crate) fn render_agent_row(
     };
     let idle_age = agent_idle_age(
         row.status,
-        row.state_age_seconds,
+        row.idle_age_seconds,
         config.idle_stale_after_seconds,
     );
     let (state, _seen) = agent_state_and_seen(row.status);

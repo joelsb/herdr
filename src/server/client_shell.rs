@@ -173,6 +173,7 @@ pub(super) fn snapshot_with_completions(
                 state_labels,
                 tokens,
                 state_age_seconds: agent.state_age_seconds,
+                idle_age_seconds: agent.idle_age_seconds,
                 focused,
             }
         })

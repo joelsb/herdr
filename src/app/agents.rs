@@ -363,7 +363,11 @@ impl App {
         }
     }
 
-    pub(super) fn agent_info(
+    // pub(crate), not pub(super): the fork's fork_contract test
+    // (`fork_contract_pane_reports_idle_age_seconds_from_the_look_clock` in
+    // `src/fork_contract_tests.rs`) drives a real `App` from outside the
+    // `app` module and reads `AgentInfo.idle_age_seconds` off it directly.
+    pub(crate) fn agent_info(
         &self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
@@ -397,6 +401,7 @@ impl App {
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
             completion_seq: terminal.last_agent_completion_seq,
             state_age_seconds: pane.state_age_seconds,
+            idle_age_seconds: pane.idle_age_seconds,
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,

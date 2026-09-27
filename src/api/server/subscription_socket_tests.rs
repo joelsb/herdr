@@ -238,6 +238,7 @@ fn reply_to_probe(request: ApiRequestMessage) {
                 scroll: None,
                 revision: 0,
                 state_age_seconds: None,
+                idle_age_seconds: None,
             },
         },
         Method::PaneRead(_) => ResponseResult::PaneRead {

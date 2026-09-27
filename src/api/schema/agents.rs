@@ -224,6 +224,9 @@ pub struct AgentInfo {
     /// Seconds this agent's state has held; see `PaneInfo::state_age_seconds`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_age_seconds: Option<u64>,
+    /// The two-clock idle-aging elapsed time; see `PaneInfo::idle_age_seconds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

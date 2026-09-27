@@ -367,6 +367,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: true,
         },
         ClientShellAgent {
@@ -384,6 +385,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: false,
         },
     ];
@@ -459,6 +461,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: Vec::new(),
             tokens: vec![("summary".into(), "review complete".into())],
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: true,
         },
         ClientShellAgent {
@@ -476,6 +479,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: vec![("blocked".into(), "needs input".into())],
             tokens: vec![("summary".into(), "waiting for Can".into())],
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: false,
         },
     ];
@@ -600,6 +604,7 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         state_age_seconds: None,
+        idle_age_seconds: None,
         focused: true,
     }];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -668,6 +673,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: true,
         },
         ClientShellAgent {
@@ -685,6 +691,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: false,
         },
         ClientShellAgent {
@@ -702,6 +709,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: false,
         },
     ];
@@ -777,6 +785,7 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         state_age_seconds: None,
+        idle_age_seconds: None,
         focused: true,
     });
     let config =
@@ -1343,6 +1352,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         state_age_seconds: None,
+        idle_age_seconds: None,
         focused: false,
     });
     state.set_snapshot(Box::new(projected));

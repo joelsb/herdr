@@ -203,6 +203,7 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         state_labels: vec![("blocked".into(), "waiting".into())],
         tokens: Vec::new(),
         state_age_seconds: None,
+        idle_age_seconds: None,
         focused: true,
     });
     projected.workspaces[0].agent_status = AgentStatus::Blocked;

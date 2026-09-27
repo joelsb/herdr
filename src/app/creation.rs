@@ -353,6 +353,11 @@ impl App {
                     .saturating_duration_since(terminal.state_entered_at())
                     .as_secs(),
             ),
+            idle_age_seconds: Some(
+                std::time::Instant::now()
+                    .saturating_duration_since(crate::workspace::pane_aged_from(pane, terminal))
+                    .as_secs(),
+            ),
             state_labels: presentation.state_labels,
             tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),

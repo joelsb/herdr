@@ -381,6 +381,7 @@ mod tests {
                         state_labels: Vec::new(),
                         tokens: Vec::new(),
                         state_age_seconds: Some(1),
+                        idle_age_seconds: None,
                         focused: true,
                     }]
                 } else {
@@ -593,7 +594,7 @@ mod tests {
         config.ui.idle_stale_after_seconds = 300;
         let shell_config = crate::client::shell::ClientShellConfig::from_config(&config);
 
-        let icon_for = |status: crate::api::schema::AgentStatus, state_age_seconds: u64| {
+        let icon_for = |status: crate::api::schema::AgentStatus, idle_age_seconds: u64| {
             let row = crate::client::shell::AgentRow {
                 pane_id: "pane_1".into(),
                 status,
@@ -601,7 +602,7 @@ mod tests {
                 rows: Vec::new(),
                 nested: false,
                 last_child: false,
-                state_age_seconds: Some(state_age_seconds),
+                idle_age_seconds: Some(idle_age_seconds),
             };
             let rect = Rect::new(0, 0, 10, 1);
             let mut buffer = Buffer::empty(rect);
@@ -631,6 +632,141 @@ mod tests {
             icon_for(AgentStatus::Idle, 3_600),
             "◌",
             "parked seen should get the distinct parked glyph"
+        );
+    }
+
+    /// FORK.md F4, review must-fix #1: a *seen* pane must age from the look
+    /// clock (`pane.seen_at`), not the state clock
+    /// (`terminal.state_entered_at()`), the same two-clock rule
+    /// `crate::workspace::pane_aged_from` already uses for the server-side
+    /// stale/parked alert. Drives a real `App`: a real hook report (the same
+    /// `AppEvent::HookStateReported` the API layer emits for
+    /// `pane.report_agent`), a real sleep so the state clock actually ages,
+    /// then a real look (`focus_pane_in_workspace` + `mark_active_tab_seen`,
+    /// the same two calls `pane.focus` makes) - not a hand-set age on a
+    /// synthetic row. If this goes red, a pane the user just looked at draws
+    /// the parked glyph instead of idle, disagreeing with the server-side
+    /// alert about the same pane.
+    #[test]
+    fn fork_contract_pane_reports_idle_age_seconds_from_the_look_clock() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("fork-idle-age"));
+        app.state.ensure_test_terminals();
+
+        let pane_id = *app.state.workspaces[0]
+            .panes
+            .keys()
+            .next()
+            .expect("a fresh workspace has a pane");
+
+        // No workspace active yet, i.e. "you have not looked": otherwise the
+        // active-tab heuristic treats the incoming report as already seen.
+        app.state.active = None;
+
+        // Real report: exactly the event `handle_pane_report_agent` emits
+        // for a live `pane.report_agent` call. Working then idle is a real
+        // completion transition (`is_background_completion_transition`),
+        // which is what actually clears `pane.seen` - reporting idle alone
+        // from the pane's default `seen: true` would prove nothing.
+        app.handle_internal_event(crate::events::AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:fork-contract-test".into(),
+            agent_label: "fork-contract-agent".into(),
+            state: crate::detect::AgentState::Working,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        app.handle_internal_event(crate::events::AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:fork-contract-test".into(),
+            agent_label: "fork-contract-agent".into(),
+            state: crate::detect::AgentState::Idle,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+
+        std::thread::sleep(Duration::from_millis(1200));
+
+        let unseen = app.agent_info(0, pane_id).expect("agent info exists");
+        assert_eq!(
+            unseen.agent_status,
+            crate::api::schema::AgentStatus::Done,
+            "a freshly reported idle pane nobody has looked at is unseen"
+        );
+        let unseen_age = unseen
+            .idle_age_seconds
+            .expect("idle_age_seconds must be reported once an agent state exists");
+        assert!(
+            unseen_age >= 1,
+            "an unseen pane must age from the result clock: got {unseen_age}"
+        );
+
+        // Real look: the exact state mutation `pane.focus` performs.
+        app.state.focus_pane_in_workspace(0, pane_id);
+        app.state.mark_active_tab_seen();
+
+        let seen = app.agent_info(0, pane_id).expect("agent info exists");
+        assert_eq!(
+            seen.agent_status,
+            crate::api::schema::AgentStatus::Idle,
+            "focusing the pane must mark it seen"
+        );
+        let seen_age = seen
+            .idle_age_seconds
+            .expect("idle_age_seconds must be reported once an agent state exists");
+        assert_eq!(
+            seen_age, 0,
+            "a pane just looked at must age from the look clock, not the stale result clock: got {seen_age}"
+        );
+
+        // The drawn glyph must actually differ, fed the real ages above, not
+        // hand-set numbers: the unseen pane is stale, the just-looked-at
+        // pane is fresh.
+        let mut config = crate::config::Config::default();
+        config.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+        config.ui.idle_stale_after_seconds = 1;
+        let shell_config = crate::client::shell::ClientShellConfig::from_config(&config);
+
+        let icon_for = |status: crate::api::schema::AgentStatus, idle_age_seconds: Option<u64>| {
+            let row = crate::client::shell::AgentRow {
+                pane_id: "pane_1".into(),
+                status,
+                focused: false,
+                rows: Vec::new(),
+                nested: false,
+                last_child: false,
+                idle_age_seconds,
+            };
+            let rect = ratatui::layout::Rect::new(0, 0, 10, 1);
+            let mut buffer = ratatui::buffer::Buffer::empty(rect);
+            crate::client::shell::render_agent_row(&mut buffer, rect, &row, &shell_config);
+            buffer.cell((1, 0)).expect("icon cell").symbol().to_owned()
+        };
+
+        let unseen_glyph = icon_for(unseen.agent_status, unseen.idle_age_seconds);
+        let seen_glyph = icon_for(seen.agent_status, seen.idle_age_seconds);
+        assert_eq!(
+            unseen_glyph, "!",
+            "the unseen stale pane must draw the stale glyph"
+        );
+        assert_eq!(
+            seen_glyph, "○",
+            "the just-looked-at pane must draw the fresh glyph, not the parked glyph the bug drew before the fix"
+        );
+        assert_ne!(
+            unseen_glyph, seen_glyph,
+            "an unseen stale pane and a seen-then-aged pane must draw different glyphs"
         );
     }
 
@@ -732,6 +868,7 @@ mod tests {
                 .map(|parent| vec![("parent_pane".into(), parent.into())])
                 .unwrap_or_default(),
             state_age_seconds: None,
+            idle_age_seconds: None,
             focused: pane_id == "pane_1",
         };
         // The children sort ahead of the parent on their own, so a passing
