@@ -90,6 +90,15 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     let should_quit = Arc::new(AtomicBool::new(false));
     #[cfg(windows)]
     spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
+    #[cfg(unix)]
+    let handoff_reject_new_clients = Arc::new(AtomicBool::new(false));
+    #[cfg(unix)]
+    spawn_unix_client_accept_thread(
+        listener,
+        should_quit.clone(),
+        server_event_tx.clone(),
+        handoff_reject_new_clients.clone(),
+    );
     let server_keybindings = app_keybindings(&app);
     let headless_size = app.state.headless_size;
 
@@ -98,14 +107,10 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         #[cfg(unix)]
         api_tx: None,
         api_server: None,
-        #[cfg(unix)]
-        client_listener: listener,
         client_socket_path: socket_path,
         client_socket_identity,
         clients: HashMap::new(),
         native_graphics: Default::default(),
-        #[cfg(unix)]
-        next_client_id: 1,
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
         popup_owner_tab_id: None,
@@ -124,6 +129,8 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         shutting_down: false,
         host_shutdown_requested: Arc::new(AtomicBool::new(false)),
         handoff_in_progress: false,
+        #[cfg(unix)]
+        handoff_reject_new_clients,
         #[cfg(unix)]
         pending_handoff_repaint_nudge: false,
         should_quit,

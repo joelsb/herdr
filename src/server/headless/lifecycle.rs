@@ -41,6 +41,8 @@ impl HeadlessServer {
             Ok(listener) => listener,
             Err(err) => {
                 self.handoff_in_progress = false;
+                self.handoff_reject_new_clients
+                    .store(false, Ordering::Release);
                 return Err(err);
             }
         };
@@ -55,8 +57,13 @@ impl HeadlessServer {
         }
 
         self.handoff_in_progress = true;
+        // The dedicated unix accept thread (`spawn_unix_client_accept_thread`,
+        // JSB-17 / FORK.md F7) reads this atomic on its own poll cadence and
+        // drops any new connection instead of starting a handshake, so no
+        // synchronous drain of the listener is needed here.
+        self.handoff_reject_new_clients
+            .store(true, Ordering::Release);
         self.disconnect_all_clients_for_handoff();
-        let _ = reject_pending_client_connections(&self.client_listener);
 
         let mut paused_terminal_ids = Vec::new();
         for terminal_id in pane_by_terminal.keys() {
@@ -262,7 +269,12 @@ impl HeadlessServer {
         listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
 
         self.api_server = Some(api_server);
-        self.client_listener = listener;
+        spawn_unix_client_accept_thread(
+            listener,
+            self.should_quit.clone(),
+            self.server_event_tx.clone(),
+            self.handoff_reject_new_clients.clone(),
+        );
         self.client_socket_path = client_path;
         self.client_socket_identity = client_socket_identity;
         Ok(())
@@ -287,6 +299,8 @@ impl HeadlessServer {
             }
         }
         self.handoff_in_progress = false;
+        self.handoff_reject_new_clients
+            .store(false, Ordering::Release);
         let _ = std::fs::remove_file(socket_path);
     }
 

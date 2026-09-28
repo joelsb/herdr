@@ -1,9 +1,17 @@
 # The server main loop spins: ~50% of a core with idle panes
 
-**Status: open defect, diagnosed, not fixed.** Tracked as JSB-17.
+**Status: fixed on branch `fix/jsb17-main-loop`, accept moved off the main loop.** Tracked as JSB-17.
 https://linear.app/joelsb/issue/JSB-17/herdr-server-burns-50percent-of-a-core-main-loop-accept-spin-plus-idle
 
-Read this before touching `src/server/headless/`, `src/server/client_accept.rs` or the idle-aging code in `src/app/runtime.rs`, and before believing any CPU measurement of this binary.
+Read this before touching `src/server/headless/`, `src/server/client_accept.rs` or the idle-aging code in `src/app/runtime.rs`, and before believing any CPU measurement of this binary. See `FORK.md` section F7 for the fix itself; this file keeps the original diagnosis evidence and the corrected baseline below.
+
+## Resolution (2026-09-28, JSB-17)
+
+The original diagnosis below is real but its baseline was measured on a lightly loaded box; a fresh capture on 2026-09-28 on Joel's real Linux server (`ssh-joel`, 7 agent panes, load 6-8 on 8 cores from other agent processes) found **stock upstream herdr 0.9.1 also burns CPU under that load** - 37 CPU-seconds in 60 seconds, not the 1.7%-of-a-core reference number below, which was measured under lighter load than this box now carries. So this was never fork-only, and the "healthy = 1.7% of a core" comparison in the Symptom section understates what stock upstream does under real contention.
+
+`strace -qq -c` on the stock build confirmed the mechanism named below: `accept4` called on every one of ~74 main-loop passes/second, all returning `EWOULDBLOCK`, each syscall costing 300-800us specifically because the box was CPU-saturated (uncontended, the same syscall costs low single-digit microseconds - see F7 for a from-quiet-Mac measurement showing no CPU delta at all). A throwaway-session capture with `HERDR_RENDER_PROF=1` (`.agents/skills/herdr-throwaway-repro/SKILL.md`) found the ~74 passes/second is not driven by PTY output volume directly: six panes each writing a few bytes every 200ms (an agent spinner's shape) is enough, because every render frame delivered to an attached client fires `ServerEvent::ClientWriterDrained` as a second, work-free wake in addition to the render itself, and the old code called `accept()` on every one of those wakes regardless.
+
+The idle-age suspect (`repaint_due_idle_age`/`sync_idle_age_deadline`, fork feature F4) named below is **ruled out, not fixed** - see F7 for the measurement that ruled it out. Fixed by moving accept to a dedicated thread that blocks on listener readiness (`spawn_unix_client_accept_thread`, `src/server/client_accept.rs`), mirroring the accept thread Windows already had. Full mechanism, before/after numbers, and the regression test: `FORK.md` F7.
 
 ## Symptom
 

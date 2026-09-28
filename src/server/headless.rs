@@ -40,16 +40,13 @@ use crate::app;
 use crate::config;
 use crate::events::AppEvent;
 use crate::ipc::{
-    bind_local_listener, remove_socket_file_if_owned, socket_file_identity, LocalListener,
-    SocketFileIdentity,
+    bind_local_listener, remove_socket_file_if_owned, socket_file_identity, SocketFileIdentity,
 };
 use crate::protocol::{
     self, AttachScrollDirection, AttachScrollSource, FrameData, ServerMessage, MAX_FRAME_SIZE,
 };
 #[cfg(unix)]
-use crate::server::client_accept::{
-    accept_pending_client_connections, reject_pending_client_connections,
-};
+use crate::server::client_accept::spawn_unix_client_accept_thread;
 use crate::server::client_shell::{
     render_pane_surface as render_client_shell_pane_surface,
     snapshot_with_completions as client_shell_snapshot,
@@ -185,14 +182,10 @@ pub struct HeadlessServer {
     // Kept on every platform so dropping HeadlessServer owns API server shutdown.
     #[cfg_attr(windows, allow(dead_code))]
     api_server: Option<api::ServerHandle>,
-    #[cfg(unix)]
-    client_listener: LocalListener,
     client_socket_path: PathBuf,
     client_socket_identity: SocketFileIdentity,
     clients: HashMap<u64, ClientConnection>,
     native_graphics: native_graphics::NativeGraphics,
-    #[cfg(unix)]
-    next_client_id: u64,
     /// The client currently driving session-wide host presentation and side effects.
     foreground_client_id: Option<u64>,
     /// Ephemeral shell connection controlling PTY geometry for each stable tab id.
@@ -232,6 +225,12 @@ pub struct HeadlessServer {
     shutting_down: bool,
     /// Flag set while exporting live PTYs to a replacement server.
     handoff_in_progress: bool,
+    /// Mirrors `handoff_in_progress` for the dedicated unix accept thread
+    /// (`spawn_unix_client_accept_thread`, JSB-17 / `FORK.md` F7), which does
+    /// not otherwise have access to `HeadlessServer` state. Set together with
+    /// `handoff_in_progress` at every assignment site.
+    #[cfg(unix)]
+    handoff_reject_new_clients: Arc<AtomicBool>,
     /// Imported panes get one app-safe resize nudge after the first client attaches.
     #[cfg(unix)]
     pending_handoff_repaint_nudge: bool,
@@ -311,7 +310,9 @@ impl HeadlessServer {
         let client_socket_identity = socket_file_identity(&client_path)?;
         info!(path = %client_path.display(), "client protocol socket listening");
 
-        // Set non-blocking on Unix so we can poll it from the event loop.
+        // Set non-blocking on Unix: the dedicated accept thread below only
+        // ever calls accept() after `poll(2)` reports the fd readable, but
+        // still needs WouldBlock-terminated batch draining once it does.
         #[cfg(unix)]
         listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
 
@@ -319,6 +320,15 @@ impl HeadlessServer {
         let (server_event_tx, server_event_rx) = mpsc::channel(64);
         #[cfg(windows)]
         spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
+        #[cfg(unix)]
+        let handoff_reject_new_clients = Arc::new(AtomicBool::new(false));
+        #[cfg(unix)]
+        spawn_unix_client_accept_thread(
+            listener,
+            should_quit.clone(),
+            server_event_tx.clone(),
+            handoff_reject_new_clients.clone(),
+        );
 
         let server_keybindings = app_keybindings(&app);
         let headless_size = app.state.headless_size;
@@ -331,14 +341,10 @@ impl HeadlessServer {
             #[cfg(unix)]
             api_tx,
             api_server,
-            #[cfg(unix)]
-            client_listener: listener,
             client_socket_path: client_path,
             client_socket_identity,
             clients: HashMap::new(),
             native_graphics: Default::default(),
-            #[cfg(unix)]
-            next_client_id: 1,
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
@@ -365,6 +371,8 @@ impl HeadlessServer {
             host_shutdown_requested: Arc::new(AtomicBool::new(false)),
             handoff_in_progress: false,
             #[cfg(unix)]
+            handoff_reject_new_clients,
+            #[cfg(unix)]
             pending_handoff_repaint_nudge: false,
             should_quit,
             server_event_rx,
@@ -377,7 +385,8 @@ impl HeadlessServer {
     /// This is the server's main runtime loop. It:
     /// - Drains internal events (pane death, state changes)
     /// - Drains API requests (from the JSON socket)
-    /// - Accepts new client connections
+    /// - Drains client connections accepted by a dedicated background thread
+    ///   (`spawn_unix_client_accept_thread` / `spawn_windows_client_accept_thread`)
     /// - Reads client messages and routes input
     /// - Handles scheduled tasks (session save, metadata expiry, etc.)
     /// - Renders virtually and streams frames to clients
@@ -462,10 +471,10 @@ impl HeadlessServer {
             self.app.sync_focus_events();
             self.app.sync_session_save_schedule();
 
-            // 4. Accept new client connections.
-            self.accept_client_connections()?;
-
-            // 5. Drain server events from client threads.
+            // 4. Drain server events from client threads. Client connections
+            // are accepted off this loop entirely: see
+            // `spawn_unix_client_accept_thread` / `spawn_windows_client_accept_thread`
+            // (JSB-17 / FORK.md F7).
             if self.drain_server_events() {
                 needs_render = true;
                 needs_full_render = true;
@@ -475,7 +484,7 @@ impl HeadlessServer {
                 continue;
             }
 
-            // 6. Handle scheduled tasks.
+            // 5. Handle scheduled tasks.
             let now = Instant::now();
             if self.handle_scheduled_tasks_headless(now, needs_render) {
                 needs_render = true;
@@ -509,7 +518,7 @@ impl HeadlessServer {
             self.stream_host_mouse_capture_mode();
             self.stream_direct_terminal_keyboard_mode();
 
-            // 7. Render virtually and stream frames. Hidden-only PTY work keeps a
+            // 6. Render virtually and stream frames. Hidden-only PTY work keeps a
             // bounded classification cadence without delaying presentation work
             // that joins the same coalesced request.
             let render_cadence_due = self.app.can_render_now(now);
@@ -573,7 +582,7 @@ impl HeadlessServer {
                 continue;
             }
 
-            // 8. Wait for next event.
+            // 7. Wait for next event.
             let next_deadline = self
                 .app
                 .next_headless_loop_deadline_with_git_refresh(
@@ -592,20 +601,35 @@ impl HeadlessServer {
                 });
             let event = {
                 tokio::select! {
-                    maybe_api = self.app.api_rx.recv() => match maybe_api {
-                        Some(msg) => LoopEvent::Api(Box::new(msg)),
-                        None => LoopEvent::Timer,
+                    maybe_api = self.app.api_rx.recv() => {
+                        crate::render_prof::event("loop.wake.api");
+                        match maybe_api {
+                            Some(msg) => LoopEvent::Api(Box::new(msg)),
+                            None => LoopEvent::Timer,
+                        }
                     },
-                    maybe_ev = self.app.event_rx.recv() => match maybe_ev {
-                        Some(ev) => LoopEvent::Internal(ev),
-                        None => LoopEvent::Timer,
+                    maybe_ev = self.app.event_rx.recv() => {
+                        crate::render_prof::event("loop.wake.event");
+                        match maybe_ev {
+                            Some(ev) => LoopEvent::Internal(ev),
+                            None => LoopEvent::Timer,
+                        }
                     },
-                    maybe_server_ev = self.server_event_rx.recv() => match maybe_server_ev {
-                        Some(ev) => LoopEvent::ServerEvent(ev),
-                        None => LoopEvent::Timer,
+                    maybe_server_ev = self.server_event_rx.recv() => {
+                        crate::render_prof::event("loop.wake.server_event");
+                        match maybe_server_ev {
+                            Some(ev) => LoopEvent::ServerEvent(ev),
+                            None => LoopEvent::Timer,
+                        }
                     },
-                    _ = sleep_until_or_pending(next_deadline) => LoopEvent::Timer,
-                    _ = self.app.render_notify.notified() => LoopEvent::RenderRequested,
+                    _ = sleep_until_or_pending(next_deadline) => {
+                        crate::render_prof::event("loop.wake.timer");
+                        LoopEvent::Timer
+                    },
+                    _ = self.app.render_notify.notified() => {
+                        crate::render_prof::event("loop.wake.render_notify");
+                        LoopEvent::RenderRequested
+                    },
                 }
             };
 
@@ -985,27 +1009,6 @@ impl HeadlessServer {
         } else {
             self.resize_tabs_for_only_shell_client(true);
         }
-    }
-
-    /// Accepts pending client connections from the non-blocking listener.
-    #[cfg(unix)]
-    fn accept_client_connections(&mut self) -> io::Result<()> {
-        if self.handoff_in_progress {
-            return reject_pending_client_connections(&self.client_listener);
-        }
-        accept_pending_client_connections(
-            &self.client_listener,
-            &mut self.next_client_id,
-            &self.should_quit,
-            &self.server_event_tx,
-        )
-    }
-
-    /// Windows named-pipe clients can block in connect unless the server has a
-    /// pending blocking accept. The dedicated accept thread handles that path.
-    #[cfg(windows)]
-    fn accept_client_connections(&mut self) -> io::Result<()> {
-        Ok(())
     }
 
     /// Drains server events from the dedicated channel.

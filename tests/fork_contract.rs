@@ -86,6 +86,16 @@ fn spawn_server(
     api_socket: &Path,
     config: &str,
 ) -> SpawnedHerdr {
+    spawn_server_with_env(config_home, runtime_dir, api_socket, config, &[])
+}
+
+fn spawn_server_with_env(
+    config_home: &Path,
+    runtime_dir: &Path,
+    api_socket: &Path,
+    config: &str,
+    extra_env: &[(&str, &str)],
+) -> SpawnedHerdr {
     fs::create_dir_all(runtime_dir).unwrap();
     write_config(config_home, config);
 
@@ -107,6 +117,9 @@ fn spawn_server(
         runtime_dir.join("herdr-client.sock"),
     );
     cmd.env("SHELL", "/bin/sh");
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -810,6 +823,133 @@ fn fork_contract_agent_explain_names_why_a_report_was_dropped() {
     );
     drop(spawned);
     cleanup_test_base(&base);
+}
+
+// ---------------------------------------------------------------------------
+// JSB-17 - accept moved off the main loop
+// ---------------------------------------------------------------------------
+
+/// Sums one `render_prof` counter (`src/render_prof.rs`) across every
+/// `render.prof` window logged in `herdr-server.log`. Each window line looks
+/// like `...counters=loop.tick=75,accept.attempt=3,... durations=...`; this
+/// pulls `name=value` out of the `counters=` segment on every matching line.
+fn sum_render_prof_counter(log: &str, name: &str) -> u64 {
+    let mut total = 0u64;
+    for line in log.lines() {
+        let Some(counters_start) = line.find("counters=") else {
+            continue;
+        };
+        let rest = &line[counters_start + "counters=".len()..];
+        let counters = rest.split(" durations=").next().unwrap_or(rest);
+        for entry in counters.split(',') {
+            if let Some(value) = entry.strip_prefix(name).and_then(|s| s.strip_prefix('=')) {
+                if let Ok(n) = value.trim().parse::<u64>() {
+                    total += n;
+                }
+            }
+        }
+    }
+    total
+}
+
+/// JSB-17. Before the fix, `accept_client_connections()` called
+/// `accept_pending_client_connections()` (a non-blocking `accept()`) on
+/// every single pass of the headless main loop, whether or not a connection
+/// was pending. A render frame delivered to an attached client wakes the
+/// loop once for the render itself and once more for
+/// `ServerEvent::ClientWriterDrained` releasing writer backpressure, so a
+/// busy but otherwise ordinary render loop (one real pane producing rapid
+/// small output - the shape of an agent spinner, not raw byte volume) drove
+/// many main-loop passes, and the accept call rode along on every one of
+/// them for free. This test forces that busy render loop with one real
+/// attached client and one real pane writing output every 50ms, then reads
+/// the `HERDR_RENDER_PROF` counters `accept.attempt` (`client_accept.rs`,
+/// fires on every call to `accept_pending_client_connections`, wherever it
+/// is invoked from) and `loop.tick` (`server/headless.rs`, fires once per
+/// main-loop pass) out of `herdr-server.log`. Before the fix,
+/// `accept.attempt` tracks `loop.tick` almost 1:1; after the fix, accept
+/// only happens on the dedicated accept thread when the listener is
+/// actually readable, so `accept.attempt` stays near zero no matter how busy
+/// rendering gets.
+#[test]
+fn fork_contract_busy_render_loop_does_not_drive_per_pass_accept_calls() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    fs::create_dir_all(&base).unwrap();
+    let spawned = spawn_server_with_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        "onboarding = false\nconfirm_close = false\n",
+        &[("HERDR_RENDER_PROF", "1")],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let pane_id = create_workspace_and_get_pane(&api_socket);
+
+    let protocol = request(
+        &api_socket,
+        serde_json::json!({"id":"test:protocol","method":"ping","params":{}}),
+    )["result"]["protocol"]
+        .as_u64()
+        .expect("protocol") as u32;
+
+    // A render frame only reaches `ServerEvent::ClientWriterDrained` (and so
+    // wakes the loop a second time per render) when a client is actually
+    // attached and being streamed to.
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let mut client = UnixStream::connect(&client_socket).expect("connect client socket");
+    let (server_protocol, error) = client_handshake(&mut client, protocol, 80, 24).unwrap();
+    assert_eq!(server_protocol, protocol);
+    assert!(error.is_none(), "client handshake failed: {error:?}");
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:busy",
+            "method": "pane.send_input",
+            "params": {
+                "pane_id": pane_id,
+                "text": "while :; do printf 'x%s\\r' $RANDOM; sleep 0.05; done",
+                "keys": ["Enter"]
+            }
+        }),
+    ));
+
+    // A couple of one-second profiler windows' worth of a real busy render
+    // loop; long enough for the counters to be load-bearing, short enough
+    // to keep the test fast.
+    std::thread::sleep(Duration::from_secs(3));
+
+    let log_path = config_home.join("herdr-dev").join("herdr-server.log");
+    let log = fs::read_to_string(&log_path).unwrap_or_default();
+    let loop_ticks = sum_render_prof_counter(&log, "loop.tick");
+    let accept_attempts = sum_render_prof_counter(&log, "accept.attempt");
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    drop(client);
+    drop(spawned);
+    cleanup_test_base(&base);
+
+    assert!(
+        loop_ticks > 20,
+        "test setup did not generate a busy render loop (loop.tick={loop_ticks}); \
+         cannot prove anything about accept without one, log follows:\n{log}"
+    );
+    assert!(
+        accept_attempts <= 2,
+        "accept() must not ride along on every busy-loop pass: loop.tick={loop_ticks} \
+         accept.attempt={accept_attempts}; JSB-17 regressed if accept.attempt tracks loop.tick"
+    );
 }
 
 fn which_python3() -> Option<PathBuf> {
