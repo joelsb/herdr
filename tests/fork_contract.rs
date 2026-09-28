@@ -313,6 +313,93 @@ fn fork_contract_live_handoff_keeps_pane_terminal_titles() {
 }
 
 // ---------------------------------------------------------------------------
+// FORK.md F6 - a moved pane's old public id survives a live handoff
+// ---------------------------------------------------------------------------
+
+/// FORK.md F6. `pane.move` across workspaces gives a pane a new public id
+/// and records `old -> new` in `App::state.public_pane_id_aliases`, so an
+/// agent still reporting to its baked-in `HERDR_PANE_ID` keeps resolving.
+/// `HandoffManifest` did not carry that map, so a live handoff after a move
+/// dropped it and the old id came back `pane_not_found`. Observed live in a
+/// throwaway session with herdr 0.9.1: before handoff `env=w1:p2
+/// resolves="pane_id":"w2:p2"`, after handoff `env=w1:p2
+/// resolves="code":"pane_not_found"`.
+#[test]
+fn fork_contract_moved_pane_old_id_resolves_after_live_handoff() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    fs::create_dir_all(&base).unwrap();
+    let spawned = spawn_server(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        "onboarding = false\nconfirm_close = false\n",
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let old_pane_id = create_workspace_and_get_pane(&api_socket);
+    let workspace_b_pane_id = create_workspace_and_get_pane(&api_socket);
+    let workspace_b = get_pane(&api_socket, &workspace_b_pane_id)["result"]["pane"]["workspace_id"]
+        .as_str()
+        .expect("workspace b id")
+        .to_string();
+
+    let moved = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:move",
+            "method": "pane.move",
+            "params": {
+                "pane_id": old_pane_id,
+                "destination": {"type": "new_tab", "workspace_id": workspace_b}
+            }
+        }),
+    );
+    assert_ok(moved.clone());
+    let new_pane_id = moved["result"]["move_result"]["pane"]["pane_id"]
+        .as_str()
+        .expect("moved pane id")
+        .to_string();
+    assert_ne!(
+        old_pane_id, new_pane_id,
+        "a cross-workspace move must assign the pane a new public id"
+    );
+
+    let resolved_before = get_pane(&api_socket, &old_pane_id);
+    assert_eq!(
+        resolved_before["result"]["pane"]["pane_id"].as_str(),
+        Some(new_pane_id.as_str()),
+        "the old id must resolve to the pane's new id before any handoff: {resolved_before}"
+    );
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    std::thread::sleep(Duration::from_secs(2));
+    wait_for_socket(&api_socket, Duration::from_secs(15));
+
+    let resolved_after = get_pane(&api_socket, &old_pane_id);
+    assert_eq!(
+        resolved_after["result"]["pane"]["pane_id"].as_str(),
+        Some(new_pane_id.as_str()),
+        "the old id must still resolve to the pane's new id after a live handoff: {resolved_after}"
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
+// ---------------------------------------------------------------------------
 // FORK.md F4 - idle aging: PaneInfo.state_age_seconds reported over the API
 // ---------------------------------------------------------------------------
 

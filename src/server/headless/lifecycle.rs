@@ -105,13 +105,17 @@ impl HeadlessServer {
             .iter()
             .map(|(_, runtime)| runtime.clone())
             .collect();
-        let manifest = crate::server::handoff::manifest_for(
+        let mut manifest = crate::server::handoff::manifest_for(
             snapshot,
             panes,
             params.expected_protocol,
             params.expected_version,
             self.api_window_title.clone(),
         );
+        // FORK.md F6: carry `public_pane_id_aliases` across the handoff, keyed
+        // by each alias's current public id so import can re-resolve it after
+        // any renumbering.
+        manifest.public_pane_id_aliases = self.app.export_public_pane_id_aliases();
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),
             &socket_path,

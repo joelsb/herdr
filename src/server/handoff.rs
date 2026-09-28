@@ -47,6 +47,13 @@ pub(crate) struct HandoffManifest {
     /// Absent from manifests written before this field existed.
     #[serde(default)]
     pub api_window_title: Option<String>,
+    /// FORK.md F6: `App::state.public_pane_id_aliases` (old public pane id ->
+    /// the pane's current public id, from a cross-workspace `pane.move`),
+    /// keyed by public id strings rather than raw `PaneId`s because handoff
+    /// import can renumber those. Absent from manifests written before this
+    /// field existed.
+    #[serde(default)]
+    pub public_pane_id_aliases: std::collections::HashMap<String, String>,
 }
 
 #[cfg(unix)]
@@ -317,6 +324,10 @@ pub(crate) fn manifest_for(
         snapshot,
         panes,
         api_window_title,
+        // FORK.md F6: filled in by the caller (`HeadlessServer::live_handoff`)
+        // once it has `&self.app` to translate the alias map to public ids;
+        // this function's signature is upstream-shaped and stays unchanged.
+        public_pane_id_aliases: std::collections::HashMap::new(),
     }
 }
 

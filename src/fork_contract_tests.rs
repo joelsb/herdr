@@ -1214,4 +1214,37 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------
+    // FORK.md F6 - a moved pane's old public id survives a live handoff
+    // -----------------------------------------------------------------
+
+    /// FORK.md F6: `HandoffManifest.public_pane_id_aliases` is `#[serde(default)]`,
+    /// mirroring `api_window_title` right above it, so a manifest an older
+    /// server wrote (before this field existed) must still deserialise. If
+    /// this goes red, an in-flight handoff between two herdr builds that
+    /// straddle this change breaks instead of degrading to no aliases.
+    #[test]
+    fn fork_contract_a_manifest_written_before_public_pane_id_aliases_still_loads() {
+        let snapshot = crate::persist::SessionSnapshot {
+            version: 0,
+            workspaces: Vec::new(),
+            active: None,
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        };
+        let manifest = crate::server::handoff::manifest_for(snapshot, Vec::new(), None, None, None);
+        let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
+        value
+            .as_object_mut()
+            .expect("manifest should be a json object")
+            .remove("public_pane_id_aliases");
+
+        let older: crate::server::handoff::HandoffManifest =
+            serde_json::from_value(value).expect("an older manifest should still load");
+
+        assert!(older.public_pane_id_aliases.is_empty());
+    }
 }

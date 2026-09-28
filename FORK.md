@@ -8,7 +8,7 @@ Fork-local file. Upstream has no `FORK.md`, so it never conflicts.
 ```bash
 export PATH=/var/tmp/xcrun-shim:$PATH      # see Build environment
 export ZIG=/opt/homebrew/bin/zig           # Zig 0.16.0; PATH zig is 0.15.2 and too old
-cargo nextest run fork_contract            # 19 tests + 1 deliberately ignored
+cargo nextest run fork_contract            # 21 tests + 1 deliberately ignored
 ```
 
 Green means every fork feature in this file survived. A red test names the feature in its own doc comment; come back here, read that `## F<n>` section, and the replication hazard that most likely caused the loss.
@@ -45,6 +45,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `ffe76393` | F4 a seen pane ages from the look clock on the wire too |
 | `b6d876ba` | fork-owned rebless of the frozen endpoint-shape fixture |
 | `b9566910` `fa6d5fab` `a830597f` `eb1e9149` | the fork contract test set |
+| `402d9299` | F6 a moved pane's old public id survives a live handoff |
 
 ---
 
@@ -155,6 +156,31 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 **Verify.** `fork_contract_subagent_panes_render_indented_under_their_parent` asserts the drawn rows, `fork_contract_*` tests for the agents-header-above-spaces-header order and for the footer clamp assert the composed frame, not the arithmetic.
 
 **Replication hazard, the big one.** This feature was written twice. v0.9.0 moved agent-row *rendering* into the client shell and kept only the half that computes the hierarchy, so panes rendered flat with nothing failing. After any upstream merge, check both halves: the entry data **and** the row rendering. The contract test now covers exactly that, which is why it must never move into an upstream-owned file.
+
+---
+
+## F6 - moved pane's old id survives a live handoff
+
+**Purpose.** `pane.move` across workspaces gives a pane a new public id and
+records `old -> new` in `App::state.public_pane_id_aliases`, so an agent
+still reporting to its baked-in `HERDR_PANE_ID` keeps resolving. Before this
+fix, a live handoff after such a move dropped the alias map: the old id came
+back `pane_not_found` and the agent's every subsequent report was silently
+unroutable. Observed live in a throwaway session with herdr 0.9.1: before
+handoff `env=w1:p2 resolves="pane_id":"w2:p2"`, after handoff `env=w1:p2
+resolves="code":"pane_not_found"`. Diagnosed and left deferred in
+`docs/next/known-issues/stale-herdr-pane-id-agent-status.md`.
+
+**How it works.**
+
+- `src/server/handoff.rs::HandoffManifest` - `#[serde(default)] public_pane_id_aliases: HashMap<String, String>`, old public id -> the pane's current public id at export time, mirroring the `api_window_title` field right above it for old-manifest compatibility.
+- `src/app/fork_pane_aliases.rs` (new fork-owned file) - `App::export_public_pane_id_aliases` (state's `PaneId`-keyed map -> public-id-keyed map, dropping dead aliases) and `App::import_public_pane_id_aliases` (public-id-keyed map -> state's `PaneId`-keyed map, skipping an alias whose `old` id already resolves on its own so a stale alias never shadows a real one). Public ids are the wire format because handoff import can renumber raw `PaneId`s; a stringly-keyed map survives that renumbering the same way `PaneId` itself cannot.
+- `src/server/headless/lifecycle.rs` - one line after `manifest_for(...)`: `manifest.public_pane_id_aliases = self.app.export_public_pane_id_aliases();`.
+- `src/server/headless/bootstrap.rs` - one line after `App::new_from_handoff(...)`: `app.import_public_pane_id_aliases(&received.manifest.public_pane_id_aliases);`.
+
+**Verify.** `fork_contract_moved_pane_old_id_resolves_after_live_handoff` (`tests/fork_contract.rs`) drives a real cross-workspace move then a real live handoff and requires the old id still resolves. `fork_contract_a_manifest_written_before_public_pane_id_aliases_still_loads` (`src/fork_contract_tests.rs`) requires a manifest missing the field still deserialises, for a handoff between two herdr builds that straddle this change.
+
+**Replication hazard.** Upstream owns `handoff.rs`, `lifecycle.rs`, and `bootstrap.rs`; after any merge, re-check that all three hook lines above still exist verbatim, since a conflict resolution that regenerates `manifest_for`'s call site or `new_from_handoff`'s binding can silently drop them without a compile error (`manifest.public_pane_id_aliases` defaults to empty, `app.import_public_pane_id_aliases` not being called just means the map stays empty - both compile fine and only `fork_contract_moved_pane_old_id_resolves_after_live_handoff` catches it).
 
 ---
 
