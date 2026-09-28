@@ -170,6 +170,7 @@ Two consequences a future port must honour: never carry this re-bless upstream, 
 
 - `docs/next/known-issues/stale-herdr-pane-id-agent-status.md` - a pane's public id changes but the agent's baked-in `HERDR_PANE_ID` does not, so it reports to a pane it no longer occupies. Diagnosed, fix deferred.
 - `docs/next/known-issues/pane-silently-rejects-agent-reports.md` - untracked in git; a suppression latch rejecting every report on one pane whose address is correct. Read it before confusing the two.
+- `docs/next/known-issues/2026-09-28-main-loop-cpu-spin.md` - the server main loop spins on a non-blocking `accept()` and recomputes the F4 idle-age repaint deadline every pass, burning ~50% of a core with idle panes. Open defect, tracked as JSB-17. Read it before touching `src/server/client_accept.rs`, `src/server/headless/` or `repaint_due_idle_age`.
 - `docs/findings/2026-09-27-debug-vt-lib-burns-a-core.md` - the installed binary built with the vt lib at `Debug` burned 64% of a core and queued every keystroke behind a page integrity check. Read it before rebuilding or reinstalling `~/.local/bin/herdr`.
 - `AGENTS.md` - the "installing a tool or plugin" rule and the pointer to this file.
 - `.agents/skills/herdr-throwaway-repro/SKILL.md` - `-u HERDR_ENV` is required in the launch command, or the nested session refuses to start.
