@@ -45,7 +45,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `ffe76393` | F4 a seen pane ages from the look clock on the wire too |
 | `b6d876ba` | fork-owned rebless of the frozen endpoint-shape fixture |
 | `b9566910` `fa6d5fab` `a830597f` `eb1e9149` | the fork contract test set |
-| `681eb138` | F6 a moved pane's old public id survives a live handoff |
+| `e065db16` | F6 a moved pane's old public id survives a live handoff |
 
 ---
 
