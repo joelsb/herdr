@@ -85,31 +85,48 @@ pub(super) fn nested_agent_pane_ids(
 ) -> Vec<(String, bool)> {
     let flat = flat_agent_pane_ids(snapshot, sort);
     // ponytail: linear scans per row; the panel holds panes, not records.
-    let parent_of = flat
-        .iter()
-        .map(|pane_id| {
-            snapshot
-                .agents
-                .iter()
-                .find(|agent| &agent.pane_id == pane_id)
-                .and_then(|agent| {
-                    agent
-                        .tokens
-                        .iter()
-                        .find(|(key, _)| key == crate::ui::SUBAGENT_PARENT_TOKEN)
-                })
-                .map(|(_, parent)| parent.clone())
-                .filter(|parent| parent != pane_id && flat.contains(parent))
-        })
-        .collect::<Vec<_>>();
-    if parent_of.iter().all(Option::is_none) {
-        return flat.into_iter().map(|pane_id| (pane_id, false)).collect();
+    let membership = flat.clone();
+    nest(flat, move |pane_id| {
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| &agent.pane_id == pane_id)
+            .and_then(|agent| {
+                agent
+                    .tokens
+                    .iter()
+                    .find(|(key, _)| key == crate::ui::SUBAGENT_PARENT_TOKEN)
+            })
+            .map(|(_, parent)| parent.clone())
+            .filter(|parent| parent != pane_id && membership.contains(parent))
+    })
+}
+
+/// Group a flat list into parent-child order: a key whose `parent_of` names
+/// another key in the same list follows that key, siblings keep incoming
+/// order, descendants flatten to one indent level, and a missing parent or a
+/// cycle leaves that key in its original relative position, unnested.
+///
+/// Shared by [`nested_agent_pane_ids`] (single endpoint, keyed by pane id) and
+/// `aggregate_navigation`'s row nesting (more than one endpoint, keyed by row
+/// index so a parent lookup never crosses endpoints). Before this helper
+/// existed the two paths carried separate copies of this walk, and the
+/// multi-endpoint one was never written - the federated sidebar's `agent_row`
+/// call passed `nested: false` unconditionally, which is why subagent panes
+/// rendered flat as soon as a second machine was connected.
+pub(super) fn nest<K: Eq + Clone>(
+    flat: Vec<K>,
+    parent_of: impl Fn(&K) -> Option<K>,
+) -> Vec<(K, bool)> {
+    let parents = flat.iter().map(&parent_of).collect::<Vec<_>>();
+    if parents.iter().all(Option::is_none) {
+        return flat.into_iter().map(|key| (key, false)).collect();
     }
 
     let mut placed = vec![false; flat.len()];
     let mut order = Vec::with_capacity(flat.len());
     for root in 0..flat.len() {
-        if parent_of[root].is_some() || placed[root] {
+        if parents[root].is_some() || placed[root] {
             continue;
         }
         placed[root] = true;
@@ -117,7 +134,7 @@ pub(super) fn nested_agent_pane_ids(
         let mut frontier = vec![flat[root].clone()];
         while let Some(parent) = frontier.pop() {
             for index in 0..flat.len() {
-                if placed[index] || parent_of[index].as_ref() != Some(&parent) {
+                if placed[index] || parents[index].as_ref() != Some(&parent) {
                     continue;
                 }
                 placed[index] = true;
@@ -131,7 +148,7 @@ pub(super) fn nested_agent_pane_ids(
         flat.into_iter()
             .enumerate()
             .filter(|(index, _)| !placed[*index])
-            .map(|(_, pane_id)| (pane_id, false)),
+            .map(|(_, key)| (key, false)),
     );
     order
 }
@@ -449,6 +466,7 @@ pub(super) fn agent_row(
     pane_id: &str,
     config: &ClientShellConfig,
     machine: Option<&str>,
+    nested: bool,
 ) -> Option<AgentRow> {
     let agent = snapshot
         .agents
@@ -511,7 +529,7 @@ pub(super) fn agent_row(
             terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
             canonical_agent,
             tokens: &tokens,
-            nested: false,
+            nested,
         },
         state_text,
     );
@@ -520,7 +538,7 @@ pub(super) fn agent_row(
         status: agent.agent_status,
         focused: agent.focused,
         rows,
-        nested: false,
+        nested,
         last_child: false,
         idle_age_seconds: agent.idle_age_seconds,
     })

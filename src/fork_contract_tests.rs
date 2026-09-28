@@ -994,6 +994,241 @@ mod tests {
         assert!(lines[parent + 1].starts_with("   ├─ "), "{lines:#?}");
     }
 
+    /// FORK.md F5: the same nesting must survive with more than one endpoint
+    /// connected (a saved SSH machine alongside local). Before this test the
+    /// federated sidebar path (`endpoint_agents::agent_rows`) called
+    /// `agent_sidebar::agent_row` with `nested` hardcoded to `false`, and
+    /// `aggregate_navigation::aggregate_agent_rows` did no parent grouping of
+    /// its own, so a subagent pane rendered flat the moment a second machine
+    /// connected - the exact defect observed live: `herdr agent list` reported
+    /// the correct `parent_pane` token, but the sidebar drew it as a sibling.
+    /// The second endpoint's agent reuses the parent's pane id on purpose:
+    /// pane ids are only unique within one endpoint's own list, so this proves
+    /// the parent lookup is scoped per endpoint rather than matching across
+    /// machines by coincidence.
+    #[test]
+    fn fork_contract_subagent_panes_nest_under_their_parent_with_two_endpoints() {
+        use crate::client::endpoint::{ClientEndpointId, ClientEndpointStatus, SavedSshEndpoint};
+        use crate::protocol::{
+            ClientShellAgent, ClientShellPane, ClientShellSnapshot, ClientShellTab,
+            ClientShellWorkspace,
+        };
+
+        fn base_snapshot(boot_id: &str) -> ClientShellSnapshot {
+            ClientShellSnapshot {
+                boot_id: boot_id.into(),
+                revision: 1,
+                config_diagnostic: None,
+                product_announcement: None,
+                update_available: None,
+                update_install_command: "herdr update".into(),
+                server_keybindings_toml: None,
+                latest_release_notes_available: false,
+                integration_updates_available: false,
+                worktree_directory: "/tmp/herdr-worktrees".into(),
+                release_notes: None,
+                focused_workspace_id: Some("ws_1".into()),
+                focused_tab_id: Some("tab_1".into()),
+                focused_pane_id: Some("pane_1".into()),
+                tab_bar_right: Vec::new(),
+                tab_bar_right_separator: " ".into(),
+                agent_view_label: None,
+                agent_order: Vec::new(),
+                workspaces: vec![ClientShellWorkspace {
+                    workspace_id: "ws_1".into(),
+                    active_tab_id: "tab_1".into(),
+                    new_workspace_cwd: "/repo".into(),
+                    number: 1,
+                    label: "client-shell".into(),
+                    custom_label: false,
+                    branch: Some("main".into()),
+                    git_ahead_behind: None,
+                    tokens: Vec::new(),
+                    worktree: None,
+                    focused: true,
+                    agent_status: crate::api::schema::AgentStatus::Idle,
+                }],
+                tabs: vec![ClientShellTab {
+                    tab_id: "tab_1".into(),
+                    workspace_id: "ws_1".into(),
+                    number: 1,
+                    label: "1".into(),
+                    custom_label: false,
+                    zoomed: false,
+                    focused: true,
+                    agent_status: crate::api::schema::AgentStatus::Idle,
+                }],
+                panes: vec![ClientShellPane {
+                    pane_id: "pane_1".into(),
+                    workspace_id: "ws_1".into(),
+                    tab_id: "tab_1".into(),
+                    label: None,
+                    cwd: Some("/repo".into()),
+                    foreground_cwd: Some("/repo".into()),
+                    focused: true,
+                    right_click_passthrough: false,
+                }],
+                agents: Vec::new(),
+                commands: Vec::new(),
+            }
+        }
+
+        let agent = |pane_id: &str, name: &str, seq: u64, parent: Option<&str>| ClientShellAgent {
+            pane_id: pane_id.into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some(name.into()),
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: crate::api::schema::AgentStatus::Idle,
+            state_change_seq: seq,
+            state_labels: Vec::new(),
+            tokens: parent
+                .map(|parent| vec![("parent_pane".into(), parent.into())])
+                .unwrap_or_default(),
+            state_age_seconds: None,
+            idle_age_seconds: None,
+            focused: pane_id == "pane_1",
+        };
+
+        // Endpoint A (local): a parent and its child, child listed first so a
+        // stable sort with nothing else to break the tie would otherwise leave
+        // it there - only the nesting pass moves it under the parent.
+        let mut local = base_snapshot("boot-local");
+        let mut child_pane = local.panes[0].clone();
+        child_pane.pane_id = "pane_2".into();
+        child_pane.focused = false;
+        local.panes.push(child_pane);
+        local.agents = vec![
+            agent("pane_2", "child", 20, Some("pane_1")),
+            agent("pane_1", "parent", 10, None),
+        ];
+
+        // Endpoint B (the saved SSH machine): one unrelated agent whose pane id
+        // is the SAME string as endpoint A's parent ("pane_1").
+        let mut remote = base_snapshot("boot-remote");
+        remote.agents = vec![agent("pane_1", "other-machine-agent", 30, None)];
+
+        let mut config = crate::config::Config::default();
+        config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+        config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+        let mut state = crate::client::shell::ClientShellState::new(
+            crate::client::shell::ClientShellConfig::from_config(&config),
+        );
+
+        let profile = SavedSshEndpoint::new("ssh-joel", "ssh-joel", "main").expect("profile");
+        let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+        state.set_endpoint_catalog(&[profile]);
+        state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+        state.set_snapshot(Box::new(local));
+        state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+        let surface_buffer = ratatui::buffer::Buffer::with_lines(["LIVE", "PANE"]);
+        state.set_pane_surface(crate::protocol::PaneSurfaceFrame {
+            boot_id: "boot-local".into(),
+            projection_revision: 1,
+            surface_revision: 1,
+            frame: crate::protocol::FrameData::from_ratatui_buffer_with_hyperlinks(
+                &surface_buffer,
+                Some(crate::protocol::CursorState {
+                    x: 1,
+                    y: 1,
+                    visible: true,
+                    shape: 2,
+                }),
+                &[],
+            ),
+            panes: vec![crate::protocol::PaneSurfacePane {
+                pane_id: "pane_1".into(),
+                content_revision: 0,
+                rect: crate::protocol::SurfaceRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 2,
+                },
+                inner_rect: crate::protocol::SurfaceRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 2,
+                },
+                scrollbar_rect: None,
+                scroll: None,
+                focused: true,
+                mouse_reporting: false,
+                sgr_pixel_mouse: false,
+                alternate_screen_active: false,
+                pixel_width: 0,
+                pixel_height: 0,
+            }],
+            splits: Vec::new(),
+            popup: None,
+            graphics: crate::protocol::SurfaceGraphicsScene::default(),
+        });
+
+        assert!(
+            state.multi_endpoint_active(),
+            "two endpoints must be connected for this test to exercise the federated path"
+        );
+
+        let frame = state.compose(106, 30).expect("agent sidebar frame");
+        let lines = frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let row_of = |needle: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} missing from {lines:#?}"))
+        };
+
+        let other = row_of("other-machine-agent");
+        let parent = row_of("parent");
+        assert_eq!(
+            row_of("└─ child"),
+            parent + 1,
+            "the local child must render directly under its own-endpoint parent, with the \
+             child tree glyph: {lines:#?}"
+        );
+        assert!(
+            !lines[other].contains("├─") && !lines[other].contains("└─"),
+            "the other endpoint's unrelated agent (same pane id as the parent) must not render \
+             nested: {lines:#?}"
+        );
+        assert!(
+            other < parent,
+            "drawn order must put each root where the priority sort placed it - the other \
+             endpoint's more-recently-changed agent ahead of the local parent group: {lines:#?}"
+        );
+
+        // The client's own "most recently changed" recency tracking (set when a
+        // snapshot is cached, see `ClientShellState::cache_endpoint_snapshot`) ranks
+        // the unrelated remote agent above the local parent, so it is the first root;
+        // the point of this assertion is not that root order, it is that the parent's
+        // child stays glued to its own root wherever that root lands, and that this
+        // order is the SAME one keyboard navigation steps through.
+        let expected_order = vec![
+            (endpoint_id.clone(), "pane_1".to_string()),
+            (ClientEndpointId::Local, "pane_1".to_string()),
+            (ClientEndpointId::Local, "pane_2".to_string()),
+        ];
+        assert_eq!(
+            state.online_agent_order_for_test(),
+            expected_order,
+            "keyboard/aggregate navigation order must match the drawn rows"
+        );
+    }
+
     /// A minimal composed sidebar fixture: one workspace, one tab, one pane,
     /// no agents. Enough to render both sidebar headers and the workspace
     /// footer without the nesting test's extra agent rows getting in the way.

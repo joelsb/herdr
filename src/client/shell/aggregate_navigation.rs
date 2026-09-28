@@ -46,6 +46,10 @@ pub(super) struct AggregateAgentRow<'a> {
     pub(super) endpoint: CachedEndpointSnapshot<'a>,
     pub(super) agent: &'a ClientShellAgent,
     pub(super) recency: u64,
+    /// This row's agent reported a [`crate::ui::SUBAGENT_PARENT_TOKEN`] naming
+    /// another agent's pane id in the *same* endpoint's row set, so it follows
+    /// that row and renders indented. See [`nest_endpoint_rows`].
+    pub(super) nested: bool,
 }
 
 pub(super) struct AggregateAgentTarget {
@@ -80,7 +84,7 @@ pub(super) fn aggregate_agent_rows<'a>(
         }
     });
 
-    if let Some(Ok(view)) = active_view {
+    let rows = if let Some(Ok(view)) = active_view {
         let mut rows = cached_endpoint_snapshots(endpoints)
             .flat_map(|endpoint| {
                 endpoint
@@ -95,6 +99,7 @@ pub(super) fn aggregate_agent_rows<'a>(
                             .unwrap_or_default(),
                         endpoint,
                         agent,
+                        nested: false,
                     })
             })
             .collect::<Vec<_>>();
@@ -123,37 +128,79 @@ pub(super) fn aggregate_agent_rows<'a>(
                         &view.sort,
                     )
                 });
-                return rows;
+            } else {
+                sort_aggregate_rows(&mut rows, sort);
             }
+        } else {
+            sort_aggregate_rows(&mut rows, sort);
         }
-        sort_aggregate_rows(&mut rows, sort);
-        return rows;
-    }
-
-    let mut rows = cached_endpoint_snapshots(endpoints)
-        .flat_map(|endpoint| {
-            super::agent_sidebar::ordered_agent_pane_ids(endpoint.snapshot, sort)
-                .into_iter()
-                .filter_map(move |pane_id| {
-                    let agent = endpoint
-                        .snapshot
-                        .agents
-                        .iter()
-                        .find(|agent| agent.pane_id == pane_id)?;
-                    Some(AggregateAgentRow {
-                        recency: endpoint
-                            .agent_recency
-                            .get(&pane_id)
-                            .copied()
-                            .unwrap_or_default(),
-                        endpoint,
-                        agent,
+        rows
+    } else {
+        let mut rows = cached_endpoint_snapshots(endpoints)
+            .flat_map(|endpoint| {
+                super::agent_sidebar::ordered_agent_pane_ids(endpoint.snapshot, sort)
+                    .into_iter()
+                    .filter_map(move |pane_id| {
+                        let agent = endpoint
+                            .snapshot
+                            .agents
+                            .iter()
+                            .find(|agent| agent.pane_id == pane_id)?;
+                        Some(AggregateAgentRow {
+                            recency: endpoint
+                                .agent_recency
+                                .get(&pane_id)
+                                .copied()
+                                .unwrap_or_default(),
+                            endpoint,
+                            agent,
+                            nested: false,
+                        })
                     })
-                })
+            })
+            .collect::<Vec<_>>();
+        sort_aggregate_rows(&mut rows, sort);
+        rows
+    };
+
+    nest_endpoint_rows(rows)
+}
+
+/// Apply [`super::agent_sidebar::nest`] to a set of rows spanning more than
+/// one endpoint, keyed by row index so a `parent_pane` token only matches a
+/// row from the *same* endpoint - pane ids are unique per endpoint, not across
+/// all of them. Runs unconditionally, after whatever filter/sort produced
+/// `rows`, so ordering and the `nested` flag agree for every consumer
+/// (drawn rows, the hit map, and keyboard navigation) regardless of which one
+/// asked.
+fn nest_endpoint_rows<'a>(rows: Vec<AggregateAgentRow<'a>>) -> Vec<AggregateAgentRow<'a>> {
+    let indices = (0..rows.len()).collect::<Vec<_>>();
+    let order = super::agent_sidebar::nest(indices, |&index| {
+        let row = &rows[index];
+        let parent_pane = row
+            .agent
+            .tokens
+            .iter()
+            .find(|(key, _)| key == crate::ui::SUBAGENT_PARENT_TOKEN)
+            .map(|(_, parent)| parent.as_str())?;
+        rows.iter().position(|candidate| {
+            candidate.endpoint.endpoint_id == row.endpoint.endpoint_id
+                && candidate.agent.pane_id == parent_pane
+                && candidate.agent.pane_id != row.agent.pane_id
         })
-        .collect::<Vec<_>>();
-    sort_aggregate_rows(&mut rows, sort);
-    rows
+    });
+
+    let mut slots = rows.into_iter().map(Some).collect::<Vec<_>>();
+    order
+        .into_iter()
+        .map(|(index, nested)| {
+            let mut row = slots[index]
+                .take()
+                .expect("nest() visits every index exactly once");
+            row.nested = nested;
+            row
+        })
+        .collect()
 }
 
 fn sort_aggregate_rows(

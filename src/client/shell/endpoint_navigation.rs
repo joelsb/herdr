@@ -100,6 +100,28 @@ impl ClientShellState {
         true
     }
 
+    /// `(endpoint id, pane id)` in the exact order [`FocusAgent`]/[`NextAgent`]/[`PreviousAgent`]
+    /// step through, i.e. `aggregate_navigation::online_agent_targets`. Test-only: a fork
+    /// contract test drives this from outside `client::shell`, where
+    /// `aggregate_navigation` itself is private, to prove the keyboard order agrees with
+    /// the drawn rows rather than assuming the two can never disagree because they share
+    /// code.
+    ///
+    /// [`FocusAgent`]: crate::input::KeybindAction::FocusAgent
+    /// [`NextAgent`]: crate::input::KeybindAction::NextAgent
+    /// [`PreviousAgent`]: crate::input::KeybindAction::PreviousAgent
+    #[cfg(test)]
+    pub(crate) fn online_agent_order_for_test(&self) -> Vec<(ClientEndpointId, String)> {
+        super::aggregate_navigation::online_agent_targets(
+            &self.endpoints,
+            &self.active_endpoint_id,
+            self.config.agent_panel_sort,
+        )
+        .into_iter()
+        .map(|target| (target.endpoint_id, target.pane_id))
+        .collect()
+    }
+
     pub(super) fn handle_endpoint_navigation(
         &mut self,
         action: crate::input::KeybindAction,

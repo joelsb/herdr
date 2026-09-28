@@ -134,37 +134,25 @@ fn agent_rows(
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
 ) -> Vec<EndpointAgentRow> {
-    let mut rendered_rows = endpoints
-        .iter()
-        .filter_map(|endpoint| {
-            endpoint.snapshot.as_deref().map(|snapshot| {
-                snapshot
-                    .agents
-                    .iter()
-                    .filter_map(|agent| {
-                        super::agent_sidebar::agent_row(
-                            snapshot,
-                            &agent.pane_id,
-                            config,
-                            Some(&endpoint.label),
-                        )
-                    })
-                    .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))
-                    .collect::<Vec<_>>()
-            })
-        })
-        .flatten()
-        .collect::<HashMap<_, _>>();
-
-    super::aggregate_navigation::aggregate_agent_rows(
+    // The aggregate order decides nesting (see `aggregate_navigation::nest_endpoint_rows`)
+    // before a single row is rendered, because `nested` changes what a row's tokens
+    // show (a child row drops its Workspace/Tab tokens), not just how it is indented -
+    // building content first and reordering after, the way the old two-phase lookup
+    // did, cannot express that.
+    let mut rows = super::aggregate_navigation::aggregate_agent_rows(
         endpoints,
         active_endpoint_id,
         config.agent_panel_sort,
     )
     .into_iter()
     .filter_map(|row| {
-        let key = (row.endpoint.endpoint_id.clone(), row.agent.pane_id.clone());
-        let mut agent = rendered_rows.remove(&key)?;
+        let mut agent = super::agent_sidebar::agent_row(
+            row.endpoint.snapshot,
+            &row.agent.pane_id,
+            config,
+            Some(row.endpoint.label),
+            row.nested,
+        )?;
         agent.focused &= row.endpoint.endpoint_id == active_endpoint_id;
         Some(EndpointAgentRow {
             endpoint_id: row.endpoint.endpoint_id.clone(),
@@ -173,5 +161,10 @@ fn agent_rows(
             agent,
         })
     })
-    .collect()
+    .collect::<Vec<_>>();
+    for index in 0..rows.len() {
+        rows[index].agent.last_child =
+            rows[index].agent.nested && rows.get(index + 1).is_none_or(|next| !next.agent.nested);
+    }
+    rows
 }
