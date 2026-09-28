@@ -44,39 +44,42 @@ pub(crate) struct AgentPanelEntry {
     pub nested: bool,
 }
 
-/// Heights of the two expanded sidebar sections, top first. `split_ratio` is
-/// the share taken by the top (agents) section.
 fn sidebar_section_heights(total_height: u16, split_ratio: f32) -> (u16, u16) {
     if total_height == 0 {
         return (0, 0);
     }
     if total_height < 6 {
-        let top_height = total_height.div_ceil(2);
-        return (top_height, total_height.saturating_sub(top_height));
+        let workspace_height = total_height.div_ceil(2);
+        return (
+            workspace_height,
+            total_height.saturating_sub(workspace_height),
+        );
     }
 
-    let top_height = ((total_height as f32) * split_ratio.clamp(0.1, 0.9)).round() as u16;
-    let top_height = top_height.clamp(3, total_height.saturating_sub(3));
-    (top_height, total_height.saturating_sub(top_height))
+    let workspace_height = ((total_height as f32) * split_ratio.clamp(0.1, 0.9)).round() as u16;
+    let workspace_height = workspace_height.clamp(3, total_height.saturating_sub(3));
+    (
+        workspace_height,
+        total_height.saturating_sub(workspace_height),
+    )
 }
 
-/// Agents on top, spaces below. Returned as `(spaces, agents)` because callers
-/// address the sections by role, not by position.
 pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.is_empty() {
         return (Rect::default(), Rect::default());
     }
 
-    let (detail_height, workspace_height) = sidebar_section_heights(content.height, split_ratio);
-    let detail_area = Rect::new(content.x, content.y, content.width, detail_height);
-    let workspace_area = Rect::new(
-        content.x,
-        content.y + detail_height,
-        content.width,
-        workspace_height,
-    );
-    (workspace_area, detail_area)
+    let (workspace_height, detail_height) = sidebar_section_heights(content.height, split_ratio);
+    (
+        Rect::new(content.x, content.y, content.width, workspace_height),
+        Rect::new(
+            content.x,
+            content.y + workspace_height,
+            content.width,
+            detail_height,
+        ),
+    )
 }
 
 pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect {
@@ -85,8 +88,8 @@ pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect
         return Rect::default();
     }
 
-    let (detail_height, _) = sidebar_section_heights(content.height, split_ratio);
-    Rect::new(content.x, content.y + detail_height, content.width, 1)
+    let (workspace_height, _) = sidebar_section_heights(content.height, split_ratio);
+    Rect::new(content.x, content.y + workspace_height, content.width, 1)
 }
 
 pub(crate) fn agent_panel_entries_from(
@@ -491,12 +494,12 @@ mod tests {
     }
 
     #[test]
-    fn expanded_sidebar_sections_puts_the_agent_detail_section_on_top() {
+    fn expanded_sidebar_sections_puts_the_spaces_section_on_top() {
         let area = Rect::new(0, 0, 40, 20);
         let (workspace_area, detail_area) = expanded_sidebar_sections(area, 0.5);
         assert!(
-            detail_area.y < workspace_area.y,
-            "agents section must render above spaces"
+            workspace_area.y < detail_area.y,
+            "spaces section must render above agents"
         );
     }
 }

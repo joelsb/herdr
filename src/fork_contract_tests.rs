@@ -1368,18 +1368,15 @@ mod tests {
         compose_minimal_sidebar_lines_from(&mut state, cols, rows)
     }
 
-    /// FORK.md F5: the agents section renders above the spaces section - the
-    /// feature's whole point ("the agents list is what gets looked at; it
-    /// belongs on top"). The only existing assertion of this
-    /// (`expanded_sidebar_sections_puts_the_agent_detail_section_on_top` in
-    /// upstream-owned `src/ui/sidebar.rs`) checks the layout function's
-    /// returned rects, which still passes if a reorder in the *drawn* sidebar
-    /// put spaces on top while the rects stayed named correctly. This reads
-    /// the actual composed frame and requires the " agents" header row to
-    /// come before the " spaces" header row. If this goes red, the sidebar
-    /// draws spaces above agents again.
+    /// Revert, 2026-09-28: Joel wants upstream's sidebar order back - spaces
+    /// on top, agents at the bottom - in both the single-endpoint and the
+    /// multi-endpoint (machines) sidebar. This reverts only the
+    /// agents-above-spaces half of FORK.md F5; subagent nesting is untouched.
+    /// Reads the actual composed frame and requires the " spaces" header row
+    /// to come before the " agents" header row. If this goes red, the sidebar
+    /// draws agents above spaces again.
     #[test]
-    fn fork_contract_sidebar_renders_agents_header_above_spaces_header() {
+    fn fork_contract_sidebar_renders_spaces_header_above_agents_header() {
         let lines = compose_minimal_sidebar_lines(106, 30);
         let row_of = |needle: &str| {
             lines
@@ -1390,36 +1387,8 @@ mod tests {
         let agents_header = row_of(" agents");
         let spaces_header = row_of(" spaces");
         assert!(
-            agents_header < spaces_header,
-            "agents header (row {agents_header}) must render above spaces header (row {spaces_header}): {lines:#?}"
-        );
-    }
-
-    /// FORK.md F5: putting spaces at the bottom of the sidebar means the
-    /// spaces section's footer (`new`/`menu`) always ends flush with the
-    /// sidebar's last row - which is also where the fixed collapse-toggle
-    /// glyph always draws (`area.bottom() - 1`) - so the footer clamp
-    /// (`.min(area.bottom().saturating_sub(2))` in
-    /// `src/client/shell/sidebar.rs`) is load-bearing on every render, not an
-    /// edge case. Nothing failed if it were deleted: no test asserted the
-    /// drawn rows. If this goes red, `new`/`menu` collide with the collapse
-    /// toggle on the sidebar's last row again.
-    #[test]
-    fn fork_contract_sidebar_footer_clamp_keeps_new_off_the_collapse_toggle_row() {
-        let lines = compose_minimal_sidebar_lines(106, 30);
-        let last_row = lines.len() - 1;
-        let footer_row = lines
-            .iter()
-            .position(|line| line.contains(" new"))
-            .unwrap_or_else(|| panic!("' new' footer missing from {lines:#?}"));
-        assert!(
-            footer_row < last_row,
-            "the workspace footer (row {footer_row}) must not sit on the sidebar's last row \
-             (row {last_row}), which the collapse-toggle glyph always occupies: {lines:#?}"
-        );
-        assert!(
-            !lines[last_row].contains(" new"),
-            "the collapse-toggle row must not also carry the 'new' footer text: {lines:#?}"
+            spaces_header < agents_header,
+            "spaces header (row {spaces_header}) must render above agents header (row {agents_header}): {lines:#?}"
         );
     }
 

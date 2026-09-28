@@ -8,7 +8,7 @@ Fork-local file. Upstream has no `FORK.md`, so it never conflicts.
 ```bash
 export PATH=/var/tmp/xcrun-shim:$PATH      # see Build environment
 export ZIG=/opt/homebrew/bin/zig           # Zig 0.16.0; PATH zig is 0.15.2 and too old
-cargo nextest run fork_contract            # 24 tests + 1 deliberately ignored
+cargo nextest run fork_contract            # 23 tests + 1 deliberately ignored
 ```
 
 Green means every fork feature in this file survived. A red test names the feature in its own doc comment; come back here, read that `## F<n>` section, and the replication hazard that most likely caused the loss.
@@ -38,7 +38,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `04278c88` | F2 `close_pane_if_idle` keybinding |
 | `61587c39` | F3 pane titles survive a live handoff |
 | `d6b82f42` `c54e7920` `276e8c91` `e5d4df50` | F4 idle aging (buckets, settings, API field, docs) |
-| `9611e6b7` | F5 agents above spaces + subagent nesting (server-side data) |
+| `9611e6b7` | F5 agents above spaces (**reverted 2026-09-28**, see below) + subagent nesting (server-side data, kept) |
 | `860e418d` | F5 nest subagent rows under their parent with more than one machine (multi-endpoint fix) |
 | `b94e4ffd` `e39543ce` `18794fbb` | v0.9.0 merge, compile/test repair, nesting re-done client-side |
 | `bafc4c59` `2f41a6bc` | 2026-09-27 port: merge of upstream `fff6c820`, 11 conflicts, merge fallout |
@@ -135,14 +135,14 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 
 ---
 
-## F5 - agents above spaces, subagent nesting
+## F5 - subagent nesting
 
-**Purpose.** The agents list is what gets looked at; it belongs on top. A coordinator's subagents belong under the coordinator, not scattered.
+**Agents-above-spaces reverted 2026-09-28.** Joel wants upstream's sidebar order back: spaces/machines on top, agents at the bottom, in both the single-endpoint sidebar and the multi-endpoint (machines) sidebar. `sidebar_section_heights`, `expanded_sidebar_sections` and `sidebar_section_divider_rect` in `src/ui/sidebar.rs` are reverted to upstream's exact code (`split_ratio` is the *workspace/spaces'* share again, section rects return `(workspace, detail)` = `(spaces, agents)` top to bottom). The footer-collision clamp (`.min(area.bottom() - 2)` on `footer_y` in `src/client/shell/sidebar.rs` and `endpoint_sidebar.rs`) existed only because spaces sat at the bottom; with spaces back on top it is dead weight and is reverted too, back to upstream's plain `workspace_area.bottom().saturating_sub(1)`. **Persisted `sidebar_section_split` note:** the field's meaning flips back (spaces' share, not agents'); an old saved ratio still lands inside the same `0.1..=0.9` clamp so it can never produce a broken or zero-height layout, just an inverted split for anyone who had manually dragged the divider under the old meaning. Joel's own `~/.config/herdr/session.json` carries `sidebar_section_split: null` (never manually resized), so this has no practical effect on his daily session; no migration was written for the general case - not worth it for a single-user cosmetic preference (YAGNI). Subagent nesting below is untouched by this revert.
+
+**Purpose.** A coordinator's subagents belong under the coordinator, not scattered.
 
 **How it works.**
 
-- `src/ui/sidebar.rs` - `sidebar_section_heights` returns `(top, bottom)`, `split_ratio` means the *agents'* share, section rects return `(spaces, agents)`. The agents header is two rows, the divider moved into the spaces header.
-- Footer collision, load-bearing: the sidebar's collapse-toggle glyph always renders at the sidebar's last row, so with spaces at the bottom the `new`/`menu` footer collided with it. `footer_y` is clamped with `.min(area.bottom() - 2)` in both `src/client/shell/sidebar.rs` and `endpoint_sidebar.rs`.
 - `src/ui.rs` - `SUBAGENT_PARENT_TOKEN = "parent_pane"`, a plain metadata token so nesting needs no wire, protocol or persistence change and a dead parent degrades to a flat row. Reported by the spawning agent: `herdr pane report-metadata <child> --source <id> --token parent_pane=<parent public pane id>`. herdr overwrites `HERDR_PANE_ID` in every pane it launches, so only the splitting parent can report the link.
 - `src/client/shell/agent_sidebar.rs` - `nested_agent_pane_ids` returns `(pane_id, is_child)` and `ordered_agent_pane_ids` delegates to it, so hit map, keyboard navigation and drawn rows cannot disagree. Children keep incoming order, descendants flatten to one indent level, a cycle or missing parent stays flat, child rows draw `├─`/`└─`.
 - `src/ui/sidebar.rs::nest_subagent_entries` - the same ordering on the server-side `AgentPanelEntry` list.
@@ -152,7 +152,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
   - `src/client/shell/aggregate_navigation.rs::nest_endpoint_rows` - calls `nest` on `aggregate_agent_rows`'s already filtered/sorted output, keyed by row index so a row's `parent_pane` token only matches another row from the *same* endpoint - pane ids are unique per endpoint, not across all of them. Runs unconditionally at the end of `aggregate_agent_rows`, after whichever branch (a custom agent view, priority sort, or the plain per-endpoint order) produced the rows, the same way the single-endpoint path always nests after `flat_agent_pane_ids` regardless of sort mode. `AggregateAgentRow` grew a `nested: bool` field to carry the result.
   - `src/client/shell/agent_sidebar.rs::agent_row` and `src/client/shell/endpoint_agents.rs::agent_rows` - `agent_row` now takes `nested: bool` instead of hardcoding it, and the federated `agent_rows` computes the aggregate order (and its `nested` flags) *before* rendering any row content, then calls `agent_row` once per row in that order - it cannot build content first and reorder after the way the old two-phase hashmap lookup did, because `nested` changes what a row's tokens show.
 
-**Verify.** `fork_contract_subagent_panes_render_indented_under_their_parent` asserts the single-endpoint drawn rows; `fork_contract_subagent_panes_nest_under_their_parent_with_two_endpoints` does the same with a second (SSH) endpoint connected, using an unrelated agent on the second endpoint that reuses the first endpoint's parent pane id to prove the parent lookup is scoped per endpoint, and also asserts `ClientShellState::online_agent_order_for_test` (a `#[cfg(test)]`-only accessor added for this, since `aggregate_navigation` is private outside `client::shell`) agrees with the drawn order. `fork_contract_*` tests for the agents-header-above-spaces-header order and for the footer clamp assert the composed frame, not the arithmetic.
+**Verify.** `fork_contract_subagent_panes_render_indented_under_their_parent` asserts the single-endpoint drawn rows; `fork_contract_subagent_panes_nest_under_their_parent_with_two_endpoints` does the same with a second (SSH) endpoint connected, using an unrelated agent on the second endpoint that reuses the first endpoint's parent pane id to prove the parent lookup is scoped per endpoint, and also asserts `ClientShellState::online_agent_order_for_test` (a `#[cfg(test)]`-only accessor added for this, since `aggregate_navigation` is private outside `client::shell`) agrees with the drawn order. `fork_contract_sidebar_renders_spaces_header_above_agents_header` asserts the composed frame shows the spaces header above the agents header (renamed and flipped 2026-09-28 from the old agents-above-spaces assertion); the matching footer-clamp test was deleted since the clamp no longer exists.
 
 **Observed.** 2026-09-28: Joel's own client, local plus the saved SSH machine `ssh-joel`, drew every subagent flat; `ssh-joel`'s `herdr agent list` did carry `parent_pane` tokens. After installing `860e418d` and reattaching (client started 18:53:57), Joel confirmed the children render nested under their parent. Diagnosis and proof: finding 0040, `2026-09-28-herdr-nesting-flat-with-two-machines.md` in `~/MYNE/Projects/tools/docs/findings/`.
 
