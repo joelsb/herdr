@@ -1482,4 +1482,155 @@ mod tests {
 
         assert!(older.public_pane_id_aliases.is_empty());
     }
+
+    // -----------------------------------------------------------------
+    // Fix, 2026-09-28 - a silently dropped agent state report names its
+    // reason (docs/findings/2026-08-28-suppression-latch-drops-agent-reports.md,
+    // 0039)
+    // -----------------------------------------------------------------
+
+    /// Finding 0039: `route_full_lifecycle_hook_report` and
+    /// `set_hook_authority_at` (`src/terminal/state.rs`) drop reports from
+    /// many branches and, before this fix, never said why:
+    /// `pane.report_agent` still answered `ok` and `agent.explain` hardcoded
+    /// `skipped_update_reason: null`. Uses `herdr:pi`/`pi`, not `herdr:jcode`,
+    /// so this test survives jcode's retirement (`FORK.md` F1) - the same
+    /// suppression-latch mechanism applies to every full-lifecycle source.
+    ///
+    /// Drives the exact 0039 shape: a hook authority is accepted, a process
+    /// exit is then observed for the *same* agent, which suppresses the
+    /// authority under `FullLifecycleHookSuppressionReason::ProcessExit`.
+    /// Because the agent never actually left the foreground, `detected_agent`
+    /// never changes, so `clear_full_lifecycle_hook_suppression_for_detected_agent`'s
+    /// `previous_detected_agent == detected_agent` guard never fires and the
+    /// latch never clears - every later report is stashed as a pending
+    /// replacement and discarded forever. Also covers the simpler case: a
+    /// report whose seq is not newer than the last one recorded for its
+    /// source is dropped and named, independently of any suppression.
+    ///
+    /// If this goes red, a dropped report is silent again: `agent.explain`
+    /// cannot tell an operator why a pane looks stuck.
+    #[test]
+    fn fork_contract_dropped_agent_report_names_its_reason() {
+        // Simpler case first, on its own terminal: `herdr:pi` never anchors
+        // (the process is never observed present), so the session-start
+        // report records a seq baseline in `hook_report_sequences` and
+        // returns `None` itself, and a later report whose seq is not newer
+        // than that baseline is dropped by the literal `seq_not_newer`
+        // branch in `route_full_lifecycle_hook_report`.
+        let mut unanchored = crate::terminal::TerminalState::new(
+            crate::terminal::TerminalId::alloc(),
+            "/tmp".into(),
+        );
+        let session_a = crate::agent_resume::AgentSessionRef::id("session_a").unwrap();
+        assert!(unanchored
+            .set_agent_session_ref_for_session_start(
+                "herdr:pi".into(),
+                "pi".into(),
+                Some(session_a.clone()),
+                Some(10),
+                Some("startup".into()),
+            )
+            .is_none());
+        assert!(
+            unanchored
+                .set_hook_authority_with_session_ref(
+                    "herdr:pi".into(),
+                    "pi".into(),
+                    crate::detect::AgentState::Working,
+                    None,
+                    Some(session_a),
+                    Some(9), // not newer than the seq-10 baseline above
+                )
+                .is_none(),
+            "a non-newer seq must be dropped"
+        );
+        assert_eq!(
+            unanchored
+                .last_dropped_report()
+                .map(|dropped| dropped.reason.as_str()),
+            Some("seq_not_newer"),
+            "the drop must name itself seq_not_newer"
+        );
+
+        // The 0039 shape, on a fresh terminal: a hook authority is accepted
+        // (process present via `set_detected_state`), then a process exit is
+        // observed for the *same* agent, which suppresses the authority under
+        // `FullLifecycleHookSuppressionReason::ProcessExit`. Because the
+        // agent never actually left the foreground, `detected_agent` never
+        // changes, so `clear_full_lifecycle_hook_suppression_for_detected_agent`'s
+        // `previous_detected_agent == detected_agent` guard never fires and
+        // the latch never clears - every later report is stashed as a
+        // pending replacement and discarded forever.
+        let mut terminal = crate::terminal::TerminalState::new(
+            crate::terminal::TerminalId::alloc(),
+            "/tmp".into(),
+        );
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+        );
+        let session = crate::agent_resume::AgentSessionRef::id("session_b").unwrap();
+
+        assert!(
+            terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:pi".into(),
+                    "pi".into(),
+                    Some(session.clone()),
+                    Some(1),
+                    Some("startup".into()),
+                )
+                .is_some(),
+            "pi should anchor the session it starts with once the process is present"
+        );
+        assert!(
+            terminal
+                .set_hook_authority_with_session_ref(
+                    "herdr:pi".into(),
+                    "pi".into(),
+                    crate::detect::AgentState::Working,
+                    None,
+                    Some(session.clone()),
+                    Some(2),
+                )
+                .is_some(),
+            "the first report on a fresh anchor must be accepted"
+        );
+        assert!(
+            terminal.last_dropped_report().is_none(),
+            "an accepted report must clear any previously recorded drop"
+        );
+
+        terminal.set_detected_state_with_visible_blocker(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+            false,
+            false,
+            true, // process_exited
+        );
+
+        // A fresh, newer report during that suppression is stashed as a
+        // pending replacement and still discarded - the exact 0039 bug.
+        assert!(
+            terminal
+                .set_hook_authority_with_session_ref(
+                    "herdr:pi".into(),
+                    "pi".into(),
+                    crate::detect::AgentState::Working,
+                    None,
+                    Some(session),
+                    Some(3),
+                )
+                .is_none(),
+            "a report during an unresolved ProcessExit suppression must be dropped"
+        );
+        assert_eq!(
+            terminal
+                .last_dropped_report()
+                .map(|dropped| dropped.reason.as_str()),
+            Some("suppressed_process_exit_pending"),
+            "the 0039 shape must be named, not silently discarded"
+        );
+    }
 }

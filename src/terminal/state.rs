@@ -14,6 +14,10 @@ use crate::terminal::TerminalId;
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
+#[path = "fork_report_drops.rs"]
+mod fork_report_drops;
+pub use fork_report_drops::{AgentReportDropReason, DroppedAgentReport};
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HookAuthority {
     pub source: String,
@@ -167,6 +171,7 @@ pub struct TerminalState {
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
     pub restore_error: Option<String>,
+    last_dropped_report: Option<DroppedAgentReport>,
 }
 
 impl TerminalState {
@@ -206,6 +211,7 @@ impl TerminalState {
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
             restore_error: None,
+            last_dropped_report: None,
         }
     }
 
@@ -704,6 +710,12 @@ impl TerminalState {
         now: Instant,
     ) -> Option<TerminalStateMutation> {
         if crate::detect::session_identity_only_integration(&source, &agent_label) {
+            self.record_dropped_report(
+                AgentReportDropReason::SessionIdentityOnlyIntegration,
+                &source,
+                &agent_label,
+                Some(state),
+            );
             return None;
         }
         if !crate::detect::full_lifecycle_hook_authority(&source, &agent_label)
@@ -711,6 +723,12 @@ impl TerminalState {
                 crate::detect::parse_agent_label(&agent_label) == Some(exit.agent)
             })
         {
+            self.record_dropped_report(
+                AgentReportDropReason::RecentProcessExitNonLifecycle,
+                &source,
+                &agent_label,
+                Some(state),
+            );
             return None;
         }
         let reanchor_sequence = match self.route_full_lifecycle_hook_report(
@@ -726,6 +744,12 @@ impl TerminalState {
             FullLifecycleHookReportRoute::Ignore => return None,
         };
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
+            self.record_dropped_report(
+                AgentReportDropReason::KnownAgentLabelConflict,
+                &source,
+                &agent_label,
+                Some(state),
+            );
             return None;
         }
         let owner_conflicts = self.current_session_owner_conflicts(&source, &agent_label);
@@ -736,6 +760,12 @@ impl TerminalState {
                 &session_ref,
             );
         if owner_conflicts && !foreground_takeover_allowed {
+            self.record_dropped_report(
+                AgentReportDropReason::OwnerConflict,
+                &source,
+                &agent_label,
+                Some(state),
+            );
             return None;
         }
         let session_ref = session_ref.map(|session_ref| {
@@ -755,14 +785,27 @@ impl TerminalState {
             &agent_label,
             &session_ref,
         ) {
+            self.record_dropped_report(
+                AgentReportDropReason::LiveAuthoritySessionConflict,
+                &source,
+                &agent_label,
+                Some(state),
+            );
             return None;
         }
         if reanchor_sequence {
             self.hook_report_sequences.remove(&source);
         }
         if !self.accept_hook_report(&source, seq) {
+            self.record_dropped_report(
+                AgentReportDropReason::AcceptHookReportSeqRejected,
+                &source,
+                &agent_label,
+                Some(state),
+            );
             return None;
         }
+        self.clear_dropped_report();
 
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
@@ -939,6 +982,12 @@ impl TerminalState {
             };
         }
         if self.full_lifecycle_hook_report_matches_stale_session(source, agent_label, session_ref) {
+            self.record_dropped_report(
+                AgentReportDropReason::StaleSession,
+                source,
+                agent_label,
+                Some(state),
+            );
             return FullLifecycleHookReportRoute::Ignore;
         }
 
@@ -968,10 +1017,22 @@ impl TerminalState {
                 .zip(session_ref.as_ref())
                 .is_some_and(|(anchored, incoming)| anchored != incoming);
         if opencode_cross_talk {
+            self.record_dropped_report(
+                AgentReportDropReason::OpencodeCrossTalk,
+                source,
+                agent_label,
+                Some(state),
+            );
             return FullLifecycleHookReportRoute::Ignore;
         }
         if let Some(suppressed) = self.suppressed_full_lifecycle_hook_reports.get(source) {
             if suppressed.agent_label != agent_label {
+                self.record_dropped_report(
+                    AgentReportDropReason::SuppressedDifferentAgentLabel,
+                    source,
+                    agent_label,
+                    Some(state),
+                );
                 return FullLifecycleHookReportRoute::Ignore;
             }
             if suppressed.reason == FullLifecycleHookSuppressionReason::HookClear {
@@ -979,13 +1040,18 @@ impl TerminalState {
                     (&suppressed.session_ref, session_ref),
                     (Some(previous), Some(incoming)) if previous != incoming
                 );
-                return if reanchor_sequence {
-                    FullLifecycleHookReportRoute::Accept {
+                if reanchor_sequence {
+                    return FullLifecycleHookReportRoute::Accept {
                         reanchor_sequence: true,
-                    }
-                } else {
-                    FullLifecycleHookReportRoute::Ignore
-                };
+                    };
+                }
+                self.record_dropped_report(
+                    AgentReportDropReason::HookClearSuppressionWithoutReanchor,
+                    source,
+                    agent_label,
+                    Some(state),
+                );
+                return FullLifecycleHookReportRoute::Ignore;
             }
         }
 
@@ -1006,9 +1072,21 @@ impl TerminalState {
         }
 
         let Some(session_ref) = session_ref.clone() else {
+            self.record_dropped_report(
+                AgentReportDropReason::MissingSessionRef,
+                source,
+                agent_label,
+                Some(state),
+            );
             return FullLifecycleHookReportRoute::Ignore;
         };
         let Some(seq) = seq else {
+            self.record_dropped_report(
+                AgentReportDropReason::MissingSeq,
+                source,
+                agent_label,
+                Some(state),
+            );
             return FullLifecycleHookReportRoute::Ignore;
         };
         if self
@@ -1016,6 +1094,12 @@ impl TerminalState {
             .get(source)
             .is_some_and(|previous| seq <= *previous)
         {
+            self.record_dropped_report(
+                AgentReportDropReason::SeqNotNewer,
+                source,
+                agent_label,
+                Some(state),
+            );
             return FullLifecycleHookReportRoute::Ignore;
         }
 
@@ -1052,6 +1136,12 @@ impl TerminalState {
                 seq,
             });
         }
+        self.record_dropped_report(
+            AgentReportDropReason::SuppressedProcessExitPending,
+            source,
+            agent_label,
+            Some(state),
+        );
         FullLifecycleHookReportRoute::Ignore
     }
 
@@ -1823,17 +1913,36 @@ impl TerminalState {
         if self.hook_authority.as_ref().is_some_and(|authority| {
             authority.agent_label != agent_label || authority.source != source
         }) {
+            self.record_dropped_report(
+                AgentReportDropReason::ReleaseAuthorityMismatch,
+                source,
+                agent_label,
+                None,
+            );
             return None;
         }
 
         let matches_current_agent = self.effective_agent_label() == Some(agent_label);
         let matches_persisted_session = self.persisted_agent_session_matches(source, agent_label);
         if !matches_current_agent && !matches_persisted_session {
+            self.record_dropped_report(
+                AgentReportDropReason::ReleaseNotCurrentOrPersistedSession,
+                source,
+                agent_label,
+                None,
+            );
             return None;
         }
         if !self.accept_hook_report(source, seq) {
+            self.record_dropped_report(
+                AgentReportDropReason::ReleaseSeqRejected,
+                source,
+                agent_label,
+                None,
+            );
             return None;
         }
+        self.clear_dropped_report();
         let preserve_foreign_persisted_session = self
             .persisted_agent_session
             .as_ref()

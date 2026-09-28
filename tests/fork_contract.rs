@@ -660,6 +660,158 @@ pathlib.Path({received:?}).write_text(data.hex())
     cleanup_test_base(&base);
 }
 
+// ---------------------------------------------------------------------------
+// Fix, 2026-09-28 - a silently dropped agent state report names its reason
+// (docs/findings/2026-08-28-suppression-latch-drops-agent-reports.md, 0039)
+// ---------------------------------------------------------------------------
+
+/// Finding 0039, real-binary half: drives a real `herdr:pi`/`pi` report
+/// through the actual socket, using a real foreground process the pane's own
+/// process-tree detector identifies as `pi`
+/// (`identify_agent_in_job_detects_shell_wrapped_pi` in `src/detect/mod.rs`)
+/// so `agent.explain` takes the full-lifecycle-hook-authority branch exactly
+/// as it would for a real `pi` session, without installing one. Reports a
+/// state at seq 11, then again at seq 10 (not newer): the second report must
+/// be dropped and `agent.explain --json`'s `skipped_update_reason` must name
+/// why, not read `null` the way it did before this fix.
+#[test]
+fn fork_contract_agent_explain_names_why_a_report_was_dropped() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    fs::create_dir_all(&base).unwrap();
+    let spawned = spawn_server(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        "onboarding = false\nconfirm_close = false\n",
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let pane_id = create_workspace_and_get_pane(&api_socket);
+
+    // A real foreground process named exactly `pi`: the pane's own
+    // process-tree detector identifies it as agent `pi` from the script
+    // path alone, the same shape `identify_agent_in_job_detects_shell_wrapped_pi`
+    // covers, so `detected_agent` becomes `Some(Agent::Pi)` without installing
+    // a real coding agent.
+    let bin_dir = base.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let script = bin_dir.join("pi");
+    fs::write(&script, "#!/bin/sh\nsleep 60\n").unwrap();
+    let mut perms = fs::metadata(&script).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script, perms).unwrap();
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:run",
+            "method": "pane.send_input",
+            "params": {
+                "pane_id": pane_id,
+                "text": script.display().to_string(),
+                "keys": ["Enter"]
+            }
+        }),
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut detected = false;
+    while Instant::now() < deadline {
+        let pane = get_pane(&api_socket, &pane_id);
+        if pane["result"]["pane"]["agent"].as_str() == Some("pi") {
+            detected = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    assert!(
+        detected,
+        "the pane's foreground `pi` script must be detected as agent pi"
+    );
+
+    // Anchor the session the way a real full-lifecycle hook does:
+    // `pane.report_agent_session` before the first state report.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:report_agent_session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "agent_session_id": "fork-contract-session",
+                "session_start_source": "new",
+                "seq": 10
+            }
+        }),
+    ));
+
+    // The accepted report.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:report_agent:n",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "working",
+                "agent_session_id": "fork-contract-session",
+                "seq": 11
+            }
+        }),
+    ));
+
+    // A report with a seq that is not newer than the one just accepted must
+    // be dropped, and `agent.explain` must say why.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:report_agent:n_minus_1",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "working",
+                "agent_session_id": "fork-contract-session",
+                "seq": 10
+            }
+        }),
+    ));
+
+    let explain = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:explain",
+            "method": "agent.explain",
+            "params": {"target": pane_id}
+        }),
+    );
+    assert_eq!(
+        explain["result"]["explain"]["skipped_update_reason"].as_str(),
+        Some("accept_hook_report_seq_rejected"),
+        "a dropped report must name its reason, not disappear silently: {explain}"
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
 fn which_python3() -> Option<PathBuf> {
     for candidate in [
         "python3",
