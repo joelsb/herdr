@@ -8,7 +8,7 @@ Fork-local file. Upstream has no `FORK.md`, so it never conflicts.
 ```bash
 export PATH=/var/tmp/xcrun-shim:$PATH      # see Build environment
 export ZIG=/opt/homebrew/bin/zig           # Zig 0.16.0; PATH zig is 0.15.2 and too old
-cargo nextest run fork_contract            # 22 tests + 1 deliberately ignored
+cargo nextest run fork_contract            # 24 tests + 1 deliberately ignored
 ```
 
 Green means every fork feature in this file survived. A red test names the feature in its own doc comment; come back here, read that `## F<n>` section, and the replication hazard that most likely caused the loss.
@@ -32,9 +32,9 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 
 | Commit | Feature |
 |---|---|
-| `46d8d3f3` | F1 jcode integration (hook asset, config editing, registry, detect gating) |
-| `e87abeb4` | F1 session anchoring before the first state report + `scripts/verify_jcode_hook.py` |
-| `b284249d` | F1 re-anchor on `jcode --resume` |
+| `46d8d3f3` | F1 jcode integration (hook asset, config editing, registry, detect gating) - **retired 2026-09-28, do not port** |
+| `e87abeb4` | F1 session anchoring before the first state report + `scripts/verify_jcode_hook.py` - **retired 2026-09-28, do not port** |
+| `b284249d` | F1 re-anchor on `jcode --resume` - **retired 2026-09-28, do not port** |
 | `04278c88` | F2 `close_pane_if_idle` keybinding |
 | `61587c39` | F3 pane titles survive a live handoff |
 | `d6b82f42` `c54e7920` `276e8c91` `e5d4df50` | F4 idle aging (buckets, settings, API field, docs) |
@@ -52,36 +52,29 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 
 ## F1 - jcode integration
 
-**Purpose.** jcode ran in herdr panes with `agent_status=unknown` and never appeared in the Agents panel, so a wall of jcode agents was invisible to herdr.
+**Retired 2026-09-28 - do not port.** Joel no longer uses jcode. On the next upstream merge, take upstream's side for every jcode hunk and delete the jcode code rather than re-adding it. Nothing has been deleted yet in this commit - this section only records what the next port must remove.
 
-**Intent.** Make jcode a *full lifecycle authority*: hooks own the state, no screen detection, and the session id is persisted so a server restart relaunches `jcode --resume <id>` instead of a bare shell.
+**Files to remove/revert** (upstream owns all of these; taking upstream's version of a file upstream also touches is enough, no jcode re-add):
 
-**How it works.**
+- `src/integration/assets/jcode/herdr-agent-state.sh` (whole asset)
+- `src/integration/mod.rs` - `JCODE_HOOK_ASSET`, `JCODE_HOOK_INSTALL_NAME`, `JCODE_HOOK_EVENTS`, `JCODE_INTEGRATION_VERSION`
+- `src/integration/env.rs` - `jcode_dir()`
+- `src/integration/targets.rs` - `install_jcode` / `uninstall_jcode`
+- `src/integration/config_edit.rs` - `build_jcode_config_with_hooks` / `remove_jcode_config_hooks`
+- `src/integration/registry.rs`, `actions.rs`, `types.rs`, `src/api/schema/integrations.rs` - the `IntegrationTarget::Jcode` variant and its arity constants
+- `src/cli/integration.rs` - the `Builtin(IntegrationTarget::Jcode)` arm
+- `src/detect/mod.rs` - `Agent::Jcode` in `ALL` and in `full_lifecycle_hook_authority`
+- `src/agent_resume.rs` + `src/persist/restore.rs` - `herdr:jcode` as an official source, and the `jcode --resume <id>` restore path
+- `src/terminal/state.rs` - `("herdr:jcode", "jcode", Some("resume" | "new"))` in the session-replacement allow-list
+- `scripts/verify_jcode_hook.py`
 
-- `src/integration/assets/jcode/herdr-agent-state.sh` - the installed reporter, `/bin/sh` + inline `python3`. One script for all five events; it reads `JCODE_HOOK_EVENT` because jcode passes hook metadata in env vars and writes nothing to stdin.
-  - Event to state: `session_start` = idle, `turn_start` and `post_tool` = working, `turn_end` = idle when `JCODE_HOOK_STATUS=ok` else blocked, `session_end` = `pane.release_agent`.
-  - `turn_start` fires before the model streams, so a turn that only thinks still reports working. That is why jcode is a lifecycle authority and not a session-only integration.
-  - Guards, all exit 0 silently: `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`, `python3` on PATH, event in the known list.
-  - Swarm guard: a visible swarm worker pane runs this hook too and already reports for itself. The script reads `$JCODE_HOME/sessions/<id>.json` and skips when `parent_id` is set.
-  - `seq = time.time_ns()`. herdr keeps the last seq per `(pane, source)` and drops anything not greater, so a per-session counter would be ignored for the life of the pane.
-  - On `session_start` it sends `pane.report_agent_session` first (seq N) and then `pane.report_agent` (seq N+1). Without the anchor, `route_full_lifecycle_hook_report` answers `ok` and discards the state.
-- `src/integration/mod.rs` - `JCODE_HOOK_ASSET`, `JCODE_HOOK_INSTALL_NAME`, `JCODE_HOOK_EVENTS`, `JCODE_INTEGRATION_VERSION = 1`. Unix only, no PowerShell asset.
-- `src/integration/env.rs` - `jcode_dir()`: `$JCODE_HOME` else `~/.jcode`.
-- `src/integration/targets.rs` - `install_jcode` / `uninstall_jcode`: write `~/.jcode/hooks/herdr-agent-state.sh`, chmod +x, then edit `~/.jcode/config.toml`.
-- `src/integration/config_edit.rs` - `build_jcode_config_with_hooks` / `remove_jcode_config_hooks`. jcode keeps hooks in `[hooks]` and accepts one command or an array per event, so install *appends* and uninstall removes only our command.
-- `src/integration/registry.rs`, `actions.rs`, `types.rs`, `src/api/schema/integrations.rs` - the `IntegrationTarget::Jcode` target and its arity constants.
-- `src/cli/integration.rs` - since upstream `fff6c820` the CLI splits targets into `IntegrationCommandTarget::{Builtin, Letta}`; jcode is `Builtin(IntegrationTarget::Jcode)`.
-- `src/detect/mod.rs` - `Agent::Jcode` in `ALL` and in `full_lifecycle_hook_authority`, deliberately **not** in `SCREEN_MANIFEST_AGENTS`: two authorities on one pane is the bug this avoids.
-- `src/agent_resume.rs` + `src/persist/restore.rs` - `herdr:jcode` is an official source, so a snapshot restores as `jcode --resume <id>`. An unofficial source reporting the same agent is refused.
-- `src/terminal/state.rs` - `("herdr:jcode", "jcode", Some("resume" | "new"))` allowed as a session *replacement*. `jcode --resume <id>` fires `session_start` twice; without replacement the pane stays anchored to the throwaway id and every later report is dropped.
+**Fork contract tests to delete** (both files): `fork_contract_install_jcode_*`, `fork_contract_uninstall_jcode_*`, `fork_contract_jcode_toml_*`, `fork_contract_jcode_is_hook_authority_*`, `fork_contract_jcode_resume_*`, `fork_contract_restore_plan_resumes_a_jcode_session`, `fork_contract_jcode_reporter_puts_correct_json_rpc_on_the_wire`.
 
-**Verify.** `cargo nextest run fork_contract` covers install, idempotent reinstall, uninstall preserving a foreign hook command, TOML round-trip in both string forms, the hook-authority-without-manifest gate, the resume re-anchor, the resume restore plan, and the actual JSON-RPC the script puts on a stand-in socket (that last one shells out to `scripts/verify_jcode_hook.py`, and skips cleanly when `python3` is missing).
+**The frozen endpoint-shape fixture re-bless goes too.** "Fork-owned deviation: the frozen endpoint-shape fixture" below exists only because `IntegrationTarget::Jcode` changes the `integration.install` shape digest. Once `Jcode` is gone, `tests/fixtures/endpoint-method-shapes-v1.json` and the re-bless reasoning in `src/server/client_commands.rs` return to upstream's version - delete the fork's re-bless, do not carry it forward.
 
-**Replication hazards.**
+**What it was, for context.** jcode ran in herdr panes with `agent_status=unknown` and never appeared in the Agents panel, so this integration made it a *full lifecycle authority*: hooks owned the state, no screen detection, and the session id was persisted so a server restart relaunched `jcode --resume <id>` instead of a bare shell. `seq = time.time_ns()` and a `pane.report_agent_session` anchor before the first `pane.report_agent` were required because `route_full_lifecycle_hook_report` silently discards an unanchored report - see F6's note below and finding 0039, which this integration's exact shape first surfaced.
 
-- Upstream adds integration targets constantly, and in the 2026-09-27 port its new `Letta` landed on the exact lines our `Jcode` occupies: `IntegrationTarget::ALL`, `integration_specs()`, `Agent::ALL`, `SCREEN_MANIFEST_AGENTS` array sizes, the `use` lists in `integration/{actions,targets}.rs`, and three translated `integrations.mdx` tables. Take upstream's list and re-add `Jcode`; then fix the array-size annotations, which the compiler catches and a conflict resolution does not.
-- Keep `Jcode` out of `SCREEN_MANIFEST_AGENTS`. If upstream ever ships a bundled `jcode.toml` manifest, drop ours or drop the hook authority, never both.
-- `HERDR_INTEGRATION_VERSION=1` in the asset must match `JCODE_INTEGRATION_VERSION`.
+**Verify (while it still exists).** `cargo nextest run fork_contract` covers install, idempotent reinstall, uninstall preserving a foreign hook command, TOML round-trip in both string forms, the hook-authority-without-manifest gate, the resume re-anchor, the resume restore plan, and the actual JSON-RPC the script puts on a stand-in socket.
 
 ---
 
@@ -203,7 +196,7 @@ Two consequences a future port must honour: never carry this re-bless upstream, 
 
 ## Fork-local docs and rules
 
-- Diagnosed herdr bugs live in `~/MYNE/Projects/tools/docs/findings/` (index `README.md` there), never in this repo: `2026-09-28-moved-pane-alias-lost-on-live-handoff.md` (0038, stale `HERDR_PANE_ID`, fixed by F6) and `2026-08-28-suppression-latch-drops-agent-reports.md` (0039, unfixed - a suppression latch rejecting every report on one pane whose address is correct). Read both before confusing the two.
+- Diagnosed herdr bugs live in `~/MYNE/Projects/tools/docs/findings/` (index `README.md` there), never in this repo: `2026-09-28-moved-pane-alias-lost-on-live-handoff.md` (0038, stale `HERDR_PANE_ID`, fixed by F6) and `2026-08-28-suppression-latch-drops-agent-reports.md` (0039, drop reason now observable - fixed 2026-09-28, the latch's real exit is still open). Read both before confusing the two. Finding 0039 applies to every full-lifecycle-hook-authority source, not only the now-retired jcode (F1) - see `src/detect/mod.rs::full_lifecycle_hook_authority`, which also covers `herdr:pi`. As of the 2026-09-28 fix, a dropped report's reason is visible over `agent.explain`'s `skipped_update_reason` and as one `tracing::info!` line per drop in `herdr-server.log` (`src/terminal/fork_report_drops.rs`).
 - `docs/next/known-issues/2026-09-28-main-loop-cpu-spin.md` - the server main loop spins on a non-blocking `accept()` and recomputes the F4 idle-age repaint deadline every pass, burning ~50% of a core with idle panes. Open defect, tracked as JSB-17. Read it before touching `src/server/client_accept.rs`, `src/server/headless/` or `repaint_due_idle_age`.
 - `docs/findings/2026-09-27-debug-vt-lib-burns-a-core.md` - the installed binary built with the vt lib at `Debug` burned 64% of a core and queued every keystroke behind a page integrity check. Read it before rebuilding or reinstalling `~/.local/bin/herdr`.
 - `AGENTS.md` - the "installing a tool or plugin" rule and the pointer to this file.
@@ -263,7 +256,7 @@ otool -tvV ~/.local/bin/herdr \
 
 1. `git fetch upstream && git checkout -b port/<date> master`.
 2. `git merge upstream/master`. Expect the conflicts to cluster exactly where upstream adds its own integrations and agents: `src/integration/*`, `src/detect/mod.rs`, `src/cli/integration.rs`, `src/agent_resume.rs`, `src/client/shell/agent_sidebar.rs`, and the translated `integrations.mdx` tables.
-3. Resolve by taking upstream's structure and re-adding our entry. Never keep our copy of a file upstream moved or rewrote. Then fix the array-size annotations the compiler flags.
+3. Resolve by taking upstream's structure and re-adding our entry - **except jcode (F1), retired 2026-09-28: for every jcode-related hunk in those files, take upstream's side and let the jcode code disappear, do not re-add it.** Never keep our copy of a file upstream moved or rewrote. Then fix the array-size annotations the compiler flags.
 4. `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.
 5. **`cargo nextest run fork_contract`.** This is the whole point of the file: a green run means every feature above survived, and a red one names which did not. Do not go exploring the features by hand first.
 6. Full `cargo nextest run`, compared against the numbers in Ground truth. The frozen endpoint-shape fixture needs re-blessing again (see above).
