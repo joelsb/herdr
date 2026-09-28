@@ -132,6 +132,8 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 
 **Verify.** `fork_contract_state_entered_at_*`, `fork_contract_mark_seen_*`, `fork_contract_unread_result_alerts_once_*`, `fork_contract_idle_age_glyph_renders_from_wire_state_age_seconds`, `fork_contract_pane_reports_idle_age_seconds_from_the_look_clock` (a real pane, a real report, a real look, the real `render_agent_row`), `fork_contract_pane_info_reports_state_age_seconds_over_the_api`, and the settings-section test that drives real Tab keystrokes.
 
+**Deadline must be in the future (2026-09-28).** `next_idle_age_expiry` (`src/app/actions.rs`) returns only crossings still ahead. Before, one idle pane already past the threshold pinned `idle_age_deadline` to that past instant: every main-loop pass found it due, `repaint_due_idle_age` recomputed the same instant, and the server never slept - 99.5% of a core on Joel's Mac, main thread busy in 4115 of 4116 samples. A fresh throwaway session hides it because no pane has aged yet; reproduce with a pane idle longer than `ui.idle_stale_after_seconds`. Test: `fork_contract_idle_age_deadline_never_lies_in_the_past`. Finding 0042 in `~/MYNE/Projects/tools/docs/findings/`.
+
 **Still dead on purpose.** `src/ui/status.rs::idle_age_at` and `AgentPanelEntry.aged_from` keep `#[allow(dead_code)]`: they are the `AppState`-side equivalents, unused because the client classifies from the wire. Delete them or wire them, but do not assume their presence means the glyph path works - check `render_agent_row` instead.
 
 ---

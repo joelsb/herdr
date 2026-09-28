@@ -284,6 +284,10 @@ impl AppState {
     /// because which clock applies depends on whether the user has looked.
     pub(crate) fn next_idle_age_expiry(&self) -> Option<std::time::Instant> {
         let threshold = self.idle_stale_after;
+        // Only crossings still ahead: one already past would be due on every
+        // loop pass and keep the server main thread from ever sleeping
+        // (FORK.md F4, JSB-17).
+        let now = std::time::Instant::now();
         self.workspaces
             .iter()
             .flat_map(|workspace| workspace.tabs.iter().flat_map(|tab| tab.panes.values()))
@@ -299,6 +303,7 @@ impl AppState {
                 };
                 Some(clock + threshold)
             })
+            .filter(|deadline| *deadline > now)
             .min()
     }
 

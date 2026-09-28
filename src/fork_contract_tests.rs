@@ -611,6 +611,55 @@ mod tests {
         );
     }
 
+    /// FORK.md F4 / JSB-17: the idle-age deadline is the moment the server
+    /// loop must next wake, so it must never lie in the past. Before the fix,
+    /// one idle pane that had already crossed the threshold kept the deadline
+    /// at that crossing forever: every loop pass saw it due, repainted,
+    /// recomputed the same past instant, and the server main thread never
+    /// slept (observed 2026-09-28 on Joel's Mac: 99.5% of a core, main thread
+    /// busy in 4115 of 4116 samples under `repaint_due_idle_age`).
+    #[test]
+    fn fork_contract_idle_age_deadline_never_lies_in_the_past() {
+        let mut state = crate::app::AppState::test_new();
+        state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("a"));
+        state.ensure_test_terminals();
+        state.idle_stale_after = Duration::from_secs(300);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let long_ago = Instant::now()
+            .checked_sub(Duration::from_secs(400))
+            .expect("uptime longer than 400s");
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .set_detected_state_with_screen_signals_at(
+                Some(crate::detect::Agent::Pi),
+                crate::detect::AgentState::Idle,
+                false,
+                false,
+                false,
+                false,
+                long_ago,
+            );
+        state.workspaces[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .seen = false;
+
+        let deadline = state.next_idle_age_expiry();
+        let now = Instant::now();
+        assert!(
+            deadline.is_none_or(|deadline| deadline > now),
+            "a crossing that already happened must not be the next wake-up, or the loop spins: deadline {deadline:?}, now {now:?}"
+        );
+    }
+
     // -----------------------------------------------------------------
     // FORK.md F4 - idle aging visible: the four buckets render distinct
     // glyphs and labels in the drawn agent row
