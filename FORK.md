@@ -168,8 +168,9 @@ fix, a live handoff after such a move dropped the alias map: the old id came
 back `pane_not_found` and the agent's every subsequent report was silently
 unroutable. Observed live in a throwaway session with herdr 0.9.1: before
 handoff `env=w1:p2 resolves="pane_id":"w2:p2"`, after handoff `env=w1:p2
-resolves="code":"pane_not_found"`. Diagnosed and left deferred in
-`docs/next/known-issues/stale-herdr-pane-id-agent-status.md`.
+resolves="code":"pane_not_found"`. Diagnosed and left deferred in finding
+`2026-09-28-moved-pane-alias-lost-on-live-handoff.md` (0038) in
+`~/MYNE/Projects/tools/docs/findings/`.
 
 **How it works.**
 
@@ -194,8 +195,7 @@ Two consequences a future port must honour: never carry this re-bless upstream, 
 
 ## Fork-local docs and rules
 
-- `docs/next/known-issues/stale-herdr-pane-id-agent-status.md` - a pane's public id changes but the agent's baked-in `HERDR_PANE_ID` does not, so it reports to a pane it no longer occupies. Diagnosed, fix deferred.
-- `docs/next/known-issues/pane-silently-rejects-agent-reports.md` - untracked in git; a suppression latch rejecting every report on one pane whose address is correct. Read it before confusing the two.
+- Diagnosed herdr bugs live in `~/MYNE/Projects/tools/docs/findings/` (index `README.md` there), never in this repo: `2026-09-28-moved-pane-alias-lost-on-live-handoff.md` (0038, stale `HERDR_PANE_ID`, fixed by F6) and `2026-08-28-suppression-latch-drops-agent-reports.md` (0039, unfixed - a suppression latch rejecting every report on one pane whose address is correct). Read both before confusing the two.
 - `docs/next/known-issues/2026-09-28-main-loop-cpu-spin.md` - the server main loop spins on a non-blocking `accept()` and recomputes the F4 idle-age repaint deadline every pass, burning ~50% of a core with idle panes. Open defect, tracked as JSB-17. Read it before touching `src/server/client_accept.rs`, `src/server/headless/` or `repaint_due_idle_age`.
 - `docs/findings/2026-09-27-debug-vt-lib-burns-a-core.md` - the installed binary built with the vt lib at `Debug` burned 64% of a core and queued every keystroke behind a page integrity check. Read it before rebuilding or reinstalling `~/.local/bin/herdr`.
 - `AGENTS.md` - the "installing a tool or plugin" rule and the pointer to this file.

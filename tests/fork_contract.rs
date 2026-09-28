@@ -512,8 +512,8 @@ fn wait_for_file_contents(path: &Path, timeout: Duration) -> Option<String> {
     None
 }
 
-/// FORK.md F2, documented gap ("close_pane_if_idle fidelity" in
-/// `docs/next/known-issues`/intent decisions): before v0.9.0 the idle check
+/// FORK.md F2, documented gap ("Fidelity gap, deliberate" in that section):
+/// before v0.9.0 the idle check
 /// asked the server whether the pane's foreground job was the pane's own
 /// shell, a real process-tree check. v0.9.0 moved key dispatch client-side,
 /// where there is no process-tree visibility, only the cached snapshot's
