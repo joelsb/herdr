@@ -39,7 +39,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `61587c39` | F3 pane titles survive a live handoff |
 | `d6b82f42` `c54e7920` `276e8c91` `e5d4df50` | F4 idle aging (buckets, settings, API field, docs) |
 | `9611e6b7` | F5 agents above spaces + subagent nesting (server-side data) |
-| *pending* | F5 nest subagent rows under their parent with more than one machine (multi-endpoint fix) |
+| `860e418d` | F5 nest subagent rows under their parent with more than one machine (multi-endpoint fix) |
 | `b94e4ffd` `e39543ce` `18794fbb` | v0.9.0 merge, compile/test repair, nesting re-done client-side |
 | `bafc4c59` `2f41a6bc` | 2026-09-27 port: merge of upstream `fff6c820`, 11 conflicts, merge fallout |
 | `a421888d` | F4 glyphs finally rendered from the client snapshot |
