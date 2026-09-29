@@ -95,8 +95,7 @@ impl ClientShellState {
         modifiers: u8,
         kind: crate::protocol::ClientKeyKind,
     ) {
-        if kind != crate::protocol::ClientKeyKind::Press
-            || !self.predictive_echo_eligible(pane_id)
+        if kind != crate::protocol::ClientKeyKind::Press || !self.predictive_echo_eligible(pane_id)
         {
             return;
         }

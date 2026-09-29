@@ -1,7 +1,9 @@
 //! Predictive local echo (FORK.md F8). See `src/client/shell/predict.rs` for
 //! the implementation this drives.
 use super::*;
-use crate::client::endpoint::{ClientEndpointId, ClientEndpointStatus, ProfileId, SavedSshEndpoint};
+use crate::client::endpoint::{
+    ClientEndpointId, ClientEndpointStatus, ProfileId, SavedSshEndpoint,
+};
 
 fn remote_profile() -> SavedSshEndpoint {
     SavedSshEndpoint {
@@ -98,7 +100,9 @@ fn key_event(ch: char) -> crate::protocol::ClientPaneInputEvent {
     }
 }
 
-fn control_key_event(code: crate::protocol::ClientKeyCode) -> crate::protocol::ClientPaneInputEvent {
+fn control_key_event(
+    code: crate::protocol::ClientKeyCode,
+) -> crate::protocol::ClientPaneInputEvent {
     crate::protocol::ClientPaneInputEvent::Key {
         code,
         modifiers: 0,
@@ -210,7 +214,10 @@ fn password_prompt_after_enter_never_draws_and_pauses() {
         },
     );
 
-    state.record_pane_prediction("pane_1", &control_key_event(crate::protocol::ClientKeyCode::Enter));
+    state.record_pane_prediction(
+        "pane_1",
+        &control_key_event(crate::protocol::ClientKeyCode::Enter),
+    );
     assert!(
         state.pane_predictions.is_empty(),
         "Enter must clear guesses and reset the epoch to unconfirmed"
@@ -253,7 +260,10 @@ fn enter_and_arrow_clear_pending_guesses() {
         },
     );
 
-    state.record_pane_prediction("pane_1", &control_key_event(crate::protocol::ClientKeyCode::Left));
+    state.record_pane_prediction(
+        "pane_1",
+        &control_key_event(crate::protocol::ClientKeyCode::Left),
+    );
 
     assert!(
         state.pane_predictions.is_empty(),
@@ -283,7 +293,7 @@ fn unconfirmed_guess_older_than_250ms_is_dropped() {
     let changed = state.tick_predictive_echo(std::time::Instant::now());
 
     assert!(changed, "tick must report that a guess was dropped");
-    assert!(state.pane_predictions.get("pane_1").is_none());
+    assert!(!state.pane_predictions.contains_key("pane_1"));
 
     let area = state.layout(40, 12).pane_surface;
     let composed = state.compose(40, 12).expect("composed frame");
