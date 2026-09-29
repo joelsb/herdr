@@ -239,6 +239,38 @@ fn password_prompt_after_enter_never_draws_and_pauses() {
     }
 }
 
+/// Wiring check: the real input dispatch path (`handle_raw_events` ->
+/// `handle_key` -> `push_pane_key` -> `record_pane_prediction`) reaches
+/// predictive echo, not just a direct call to an internal method. A future
+/// merge that drops the one-line hook in `input.rs` would leave every other
+/// test in this file passing (they all call `record_pane_prediction` or
+/// seed `pane_predictions` directly) while the real feature went silently
+/// dead - this is the test that would catch it.
+#[test]
+fn real_input_dispatch_reaches_predictive_echo() {
+    let mut state = remote_state_with_surface();
+    state.pane_predictions.insert(
+        "pane_1".to_string(),
+        super::super::predict::PanePrediction {
+            epoch: super::super::predict::PredictionEpoch::Confirmed,
+            guesses: Vec::new(),
+        },
+    );
+
+    let key = crate::input::TerminalKey::new(
+        crossterm::event::KeyCode::Char('x'),
+        crossterm::event::KeyModifiers::empty(),
+    );
+    state.handle_raw_events(vec![crate::raw_input::RawInputEvent::Key(key)]);
+
+    let area = state.layout(40, 12).pane_surface;
+    let composed = state.compose(40, 12).expect("composed frame");
+    let buffer = composed.to_ratatui_buffer().expect("ratatui buffer");
+    let cell = &buffer[(area.x + 2, area.y)];
+    assert_eq!(cell.symbol(), "x");
+    assert!(cell.modifier.contains(Modifier::DIM));
+}
+
 /// Behaviour #5: Enter and an arrow both clear pending guesses (Enter is
 /// covered above; this covers the "any of these clears" catch-all with a
 /// deliberately reverted control to prove the assertion is load-bearing -
