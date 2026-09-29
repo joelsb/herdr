@@ -1498,12 +1498,6 @@ impl TerminalState {
                     Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
                 | ("herdr:antigravity_cli", "agy", None)
-                // `jcode --resume <id>` fires session_start twice: `new` for
-                // the session the process is constructed with, then `resume`
-                // for the session actually restored. Without replacement the
-                // pane stays anchored to the first id and every later report
-                // is dropped for the life of the pane.
-                | ("herdr:jcode", "jcode", Some("resume" | "new"))
         )
     }
 
@@ -2764,12 +2758,6 @@ mod tests {
             assert_eq!(terminal.state, AgentState::Working);
         }
     }
-
-    // `jcode_resume_reanchors_full_lifecycle_authority` moved to
-    // `fork_contract_tests.rs` as `fork_contract_jcode_resume_reanchors_full_lifecycle_authority`
-    // (fork-owned, see FORK.md F1) - every symbol it needed
-    // (`set_agent_session_ref_for_session_start`, `set_hook_authority_with_session_ref`,
-    // `TerminalState::new`) is already `pub`.
 
     #[test]
     fn session_identity_claims_leave_state_to_detection() {

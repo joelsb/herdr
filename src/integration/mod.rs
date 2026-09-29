@@ -19,23 +19,10 @@ pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
-// Fork contract test surface only: `src/fork_contract_tests.rs` (outside this
-// module) needs these to move the jcode install/uninstall assertions there.
-// See FORK.md F1.
-#[cfg(test)]
-pub(crate) use command::hook_command;
-#[cfg(test)]
-pub(crate) use config_edit::{parse_toml_string_or_array, render_toml_string_or_array};
-#[cfg(test)]
-pub(crate) use env::JCODE_HOME_ENV_VAR;
-#[cfg(test)]
-pub(crate) use file_ops::remove_dir_all_if_exists;
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
     integration_recommendations, integration_target_label, print_outdated_update_notice,
 };
-#[cfg(test)]
-pub(crate) use targets::{install_jcode, uninstall_jcode};
 pub(crate) use types::{
     ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,
     IntegrationStatusKind,
@@ -333,26 +320,6 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 2;
-// jcode ships no PowerShell hook: its integration is Unix-only, matching the
-// platforms gate in integration_target_supported.
-// pub(crate): `src/fork_contract_tests.rs` asserts against these directly
-// (FORK.md F1), so they must be reachable outside this module.
-pub(crate) const JCODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
-pub(crate) const JCODE_HOOK_ASSET: &str = include_str!("assets/jcode/herdr-agent-state.sh");
-const JCODE_INTEGRATION_VERSION: u32 = 1;
-/// The jcode lifecycle events herdr subscribes to.
-///
-/// jcode dispatches one command per event and passes everything in
-/// `JCODE_HOOK_*` env vars, so a single script handles all five and reads
-/// `JCODE_HOOK_EVENT` to decide what to report. `post_tool` is included
-/// because a long tool call is the clearest evidence a turn is still running.
-pub(crate) const JCODE_HOOK_EVENTS: [&str; 5] = [
-    "session_start",
-    "turn_start",
-    "turn_end",
-    "post_tool",
-    "session_end",
-];
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

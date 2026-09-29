@@ -23,7 +23,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -31,16 +30,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use support::{
     cleanup_test_base, client_handshake, register_runtime_dir, register_spawned_herdr_pid,
-    send_client_shell_key, unregister_spawned_herdr_pid, wait_for_socket,
+    unregister_spawned_herdr_pid, wait_for_socket,
 };
-
-/// Alt (crossterm `KeyModifiers::ALT.bits()`); the client-shell wire protocol
-/// sends semantic keys, not raw terminal escape bytes.
-const ALT_MODIFIER: u8 = 4;
-
-fn send_alt_x(client: &mut UnixStream, pane_id: &str) -> Result<(), String> {
-    send_client_shell_key(client, pane_id, 'x', ALT_MODIFIER)
-}
 
 struct SpawnedHerdr {
     _master: Box<dyn MasterPty + Send>,
@@ -158,28 +149,6 @@ fn assert_ok(response: serde_json::Value) {
     );
 }
 
-fn pane_count(api_socket: &Path) -> usize {
-    let response = request(
-        api_socket,
-        serde_json::json!({"id":"test:panes","method":"pane.list","params":{}}),
-    );
-    response["result"]["panes"]
-        .as_array()
-        .map(|panes| panes.len())
-        .unwrap_or_else(|| panic!("pane.list returned no panes array: {response}"))
-}
-
-fn wait_for_pane_count(api_socket: &Path, expected: usize, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if pane_count(api_socket) == expected {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
 fn wait_for_pane_title(api_socket: &Path, pane_id: &str, timeout: Duration) -> Option<String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -230,26 +199,6 @@ fn get_pane(api_socket: &Path, pane_id: &str) -> serde_json::Value {
         }),
     )
 }
-
-// ---------------------------------------------------------------------------
-// FORK.md F2 - close_pane_if_idle
-//
-// The decision itself ("idle" means no agent entry for the focused pane in
-// the client's own cached snapshot) is real key-dispatch logic that runs
-// inside the `herdr` CLIENT process (`ClientShellState::close_focused_pane_if_idle`,
-// `src/client/shell/input.rs`), not on the server this file otherwise drives.
-// A raw socket standing in for the client (as this file does everywhere
-// else) can only send already-classified wire messages - it cannot reach
-// this decision, which runs *before* that classification happens. Proving
-// it therefore means calling the real client entry point in-process:
-// `fork_contract_close_pane_if_idle_closes_an_agent_free_pane_but_not_one_with_an_agent`
-// in `src/fork_contract_tests.rs` does that, driving `ClientShellState`
-// exactly the way the client binary's own input loop does
-// (`handle_input_bytes`), and is the correct home for it. See that file for
-// the coverage; there is no additional real-binary-driving test to add here
-// for F2. The documented-fidelity-gap end-to-end test moved with the rest of
-// this file's former content stays below, `#[ignore]`d, unchanged.
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // FORK.md F3 - pane titles survive a live handoff
@@ -461,208 +410,6 @@ fn fork_contract_pane_info_reports_state_age_seconds_over_the_api() {
     assert!(
         age.is_some(),
         "pane.get must report state_age_seconds once an agent state has been reported: {response}"
-    );
-
-    let _ = request(
-        &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
-    );
-    drop(spawned);
-    cleanup_test_base(&base);
-}
-
-// ---------------------------------------------------------------------------
-// FORK.md F1 - the jcode reporter script's JSON-RPC on the wire
-// ---------------------------------------------------------------------------
-
-/// FORK.md F1. Runs `scripts/verify_jcode_hook.py` (already committed,
-/// intentionally not reimplemented here) against the real reporter asset,
-/// `src/integration/assets/jcode/herdr-agent-state.sh`, over a stand-in Unix
-/// socket, and asserts the actual JSON-RPC the script emits: the session
-/// anchor precedes the first state report with a strictly lower seq,
-/// `turn_start` reports working, `turn_end` with a non-ok status reports
-/// blocked, and a session whose `parent_id` is set (a visible swarm worker)
-/// reports nothing. Skips cleanly when `python3` is not on PATH rather than
-/// failing, since this environment fact is outside this port's control.
-#[test]
-fn fork_contract_jcode_reporter_puts_correct_json_rpc_on_the_wire() {
-    let python3 = which_python3();
-    let Some(python3) = python3 else {
-        eprintln!("skipping: python3 not found on PATH");
-        return;
-    };
-
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir.join("scripts/verify_jcode_hook.py");
-    let hook = manifest_dir.join("src/integration/assets/jcode/herdr-agent-state.sh");
-    assert!(script.exists(), "missing {script:?}");
-    assert!(hook.exists(), "missing {hook:?}");
-
-    let output = Command::new(&python3)
-        .arg(&script)
-        .arg(&hook)
-        .output()
-        .unwrap_or_else(|err| panic!("failed to run {python3:?} {script:?}: {err}"));
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "verify_jcode_hook.py reported a failing check:\n{stdout}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn wait_for_file_contents(path: &Path, timeout: Duration) -> Option<String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Ok(text) = fs::read_to_string(path) {
-            if !text.trim().is_empty() {
-                return Some(text);
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    None
-}
-
-/// FORK.md F2, documented gap ("Fidelity gap, deliberate" in that section):
-/// before v0.9.0 the idle check
-/// asked the server whether the pane's foreground job was the pane's own
-/// shell, a real process-tree check. v0.9.0 moved key dispatch client-side,
-/// where there is no process-tree visibility, only the cached snapshot's
-/// agent list (see `fork_contract_close_pane_if_idle_closes_an_agent_free_pane_but_not_one_with_an_agent`
-/// above for the check that replaced it). That correctly protects a
-/// *recognized* agent, but this test's stand-in is a bare, unrecognized
-/// `python3` script standing in for *any* foreground program, which the
-/// client cannot distinguish from an idle shell and so incorrectly closes.
-/// Deliberately kept `#[ignore]`d: fixing this needs a new advertised
-/// endpoint method (e.g. `pane.close_if_idle`) run server-side, which is a
-/// wire-protocol-contract change out of this port's scope; this test is the
-/// gap's regression-in-waiting, not something to make pass here.
-#[ignore = "known gap: client-side close_pane_if_idle only recognizes herdr-detected agents as busy, not an arbitrary foreground program; see doc comment above and FORK.md F2"]
-#[test]
-fn fork_contract_close_pane_if_idle_reaches_a_busy_pane_then_closes_it_once_idle() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-    let script = base.join("read-alt-x.py");
-    let ready_marker = base.join("reader-ready");
-    let received_marker = base.join("reader-received");
-
-    fs::create_dir_all(&base).unwrap();
-    // Stands in for the agent running in the pane: it reports the raw bytes it
-    // received, then exits, leaving the pane at a bare shell prompt.
-    fs::write(
-        &script,
-        format!(
-            r#"import os
-import pathlib
-import select
-import sys
-import tty
-
-pathlib.Path({ready:?}).write_text("ready")
-tty.setraw(sys.stdin.fileno())
-ready_fds, _, _ = select.select([sys.stdin.fileno()], [], [], 10)
-data = os.read(sys.stdin.fileno(), 32) if ready_fds else b""
-pathlib.Path({received:?}).write_text(data.hex())
-"#,
-            ready = ready_marker.display().to_string(),
-            received = received_marker.display().to_string()
-        ),
-    )
-    .unwrap();
-
-    let spawned = spawn_server(
-        &config_home,
-        &runtime_dir,
-        &api_socket,
-        "onboarding = false\nconfirm_close = false\n\n[keys]\nclose_pane_if_idle = \"alt+x\"\n",
-    );
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    register_runtime_dir(&runtime_dir);
-
-    let pane_id = create_workspace_and_get_pane(&api_socket);
-
-    // Two panes, so closing one is observable without tearing down the
-    // workspace (a last-pane close takes the workspace with it).
-    assert_ok(request(
-        &api_socket,
-        serde_json::json!({
-            "id": "test:pane:split",
-            "method": "pane.split",
-            "params": {"target_pane_id": pane_id, "direction": "right", "focus": false}
-        }),
-    ));
-    assert_eq!(pane_count(&api_socket), 2, "split should produce two panes");
-
-    // Run the stand-in agent in the focused pane.
-    assert_ok(request(
-        &api_socket,
-        serde_json::json!({
-            "id": "test:pane:run",
-            "method": "pane.send_input",
-            "params": {
-                "pane_id": pane_id,
-                "text": format!("python3 {}", script.display()),
-                "keys": ["Enter"]
-            }
-        }),
-    ));
-    assert!(
-        wait_for_file_contents(&ready_marker, Duration::from_secs(10)).is_some(),
-        "the stand-in agent never started"
-    );
-
-    let protocol = request(
-        &api_socket,
-        serde_json::json!({"id":"test:protocol","method":"ping","params":{}}),
-    )["result"]["protocol"]
-        .as_u64()
-        .expect("protocol") as u32;
-
-    wait_for_socket(&client_socket, Duration::from_secs(10));
-    let mut client = UnixStream::connect(&client_socket).expect("connect client socket");
-    let (server_protocol, error) = client_handshake(&mut client, protocol, 80, 24).unwrap();
-    assert_eq!(server_protocol, protocol);
-    assert!(error.is_none(), "client handshake failed: {error:?}");
-
-    // --- Step 1: busy pane. The chord must reach the program. ---
-    send_alt_x(&mut client, &pane_id).expect("send alt+x to busy pane");
-
-    let received = wait_for_file_contents(&received_marker, Duration::from_secs(10))
-        .expect("the program in the pane never received any key");
-    assert!(
-        received.trim().contains("1b78"),
-        "Alt+X must reach the program running in the pane, got bytes: {received}"
-    );
-    assert_eq!(
-        pane_count(&api_socket),
-        2,
-        "the pane must NOT close while a program is running in it"
-    );
-
-    // --- Step 2: the program has exited, so the pane is idle. ---
-    std::thread::sleep(Duration::from_millis(1500));
-
-    let process_info = request(
-        &api_socket,
-        serde_json::json!({
-            "id":"test:pane:process_info",
-            "method":"pane.process_info",
-            "params":{"pane_id": pane_id}
-        }),
-    );
-
-    send_alt_x(&mut client, &pane_id).expect("send alt+x to idle pane");
-
-    assert!(
-        wait_for_pane_count(&api_socket, 1, Duration::from_secs(10)),
-        "Alt+X should close the pane once it is idle, panes still: {}, foreground job at press time: {process_info}",
-        pane_count(&api_socket)
     );
 
     let _ = request(
@@ -950,19 +697,4 @@ fn fork_contract_busy_render_loop_does_not_drive_per_pass_accept_calls() {
         "accept() must not ride along on every busy-loop pass: loop.tick={loop_ticks} \
          accept.attempt={accept_attempts}; JSB-17 regressed if accept.attempt tracks loop.tick"
     );
-}
-
-fn which_python3() -> Option<PathBuf> {
-    for candidate in [
-        "python3",
-        "/opt/homebrew/bin/python3.12",
-        "/usr/bin/python3",
-    ] {
-        if let Ok(output) = Command::new(candidate).arg("--version").output() {
-            if output.status.success() {
-                return Some(PathBuf::from(candidate));
-            }
-        }
-    }
-    None
 }

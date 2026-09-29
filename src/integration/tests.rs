@@ -145,11 +145,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
-    std::env::remove_var(JCODE_HOME_ENV_VAR);
 }
-
-// `jcode_hook_commands` moved to `fork_contract_tests.rs` with the tests
-// that used it (see FORK.md F1).
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
     hook_command(hook_path, Some(action))
@@ -4744,8 +4740,3 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
 }
-
-// The jcode install/uninstall contract tests, and the toml-round-trip test,
-// moved to `fork_contract_tests.rs` (fork-owned, `fork_contract_` prefix) -
-// see FORK.md F1. This upstream-owned file must not carry fork assertions
-// that a future merge could delete along with an unrelated hunk.

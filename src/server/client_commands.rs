@@ -298,28 +298,6 @@ mod tests {
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
 
-        // `integration.install`'s frozen digest in tests/fixtures/endpoint-method-shapes-v1.json
-        // was reblessed for this fork ONLY, because `IntegrationTarget::Jcode` is a real
-        // enum variant reachable from that request's schema (see FORK.md F1) and it
-        // changes the shape hash upstream's rule exists to protect. Upstream forbids
-        // reblessing this fixture for exactly that reason: in an unforked build, no
-        // client outside this repo can be running against a server carrying `Jcode`,
-        // so its shape must never move under an external client. Here the fork's binary
-        // is both the only client and the only server, so the deviation is safe and
-        // deliberate, not a compatibility break.
-        //
-        // Regenerated 2026-09-27 by running this test, reading the new digest out of the
-        // panic's "left" value (the value `endpoint_method_shape_digests()` actually
-        // computed), and writing that into the fixture's `integration.install` entry by
-        // hand (the fixture is plain JSON, so it carries no inline comment; this is the
-        // record of why that one entry differs from upstream's own copy of this file).
-        //
-        // A future upstream port that re-adds `Jcode` must redo this exact regeneration
-        // for whatever new digest that merge produces: rerun this test, copy the new
-        // "left" value for `integration.install` into the fixture, and update this note's
-        // date. Never bless any other entry in this fixture; a genuine upstream shape
-        // change on any other method is a real compatibility break to fix at the source,
-        // not to paper over here.
         assert_eq!(
             actual, expected,
             "an existing endpoint method changed shape; add load-bearing behavior as a new advertised method or explicitly gate new fields"

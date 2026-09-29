@@ -225,9 +225,6 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
-        ("herdr:jcode", "jcode", AgentSessionRefKind::Id) => {
-            vec!["jcode".into(), "--resume".into(), session_ref.value.clone()]
-        }
         ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
             if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
                 if agent_id.is_empty() {
@@ -285,7 +282,6 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
-            | ("herdr:jcode", "jcode")
             | ("herdr:letta", "letta")
     )
 }

@@ -64,12 +64,11 @@ pub enum Agent {
     Qwen,
     Letta,
     Maki,
-    Jcode,
     Muse,
 }
 
 impl Agent {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -93,13 +92,9 @@ impl Agent {
         Self::Qwen,
         Self::Letta,
         Self::Maki,
-        Self::Jcode,
         Self::Muse,
     ];
 
-    // Jcode is deliberately absent: its integration is a full lifecycle
-    // authority (see full_lifecycle_hook_authority), so screen manifest
-    // fallback would be a second, competing source of truth.
     pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
         Self::Pi,
         Self::Claude,
@@ -151,7 +146,6 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Letta => "letta",
         Agent::Maki => "maki",
-        Agent::Jcode => "jcode",
         Agent::Muse => "muse",
     }
 }
@@ -187,7 +181,6 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Letta => "letta",
         Agent::Maki => "maki",
-        Agent::Jcode => "jcode",
         Agent::Muse => "muse",
     }
 }
@@ -228,7 +221,6 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "letta" | "letta-code" | "letta code" => Some(Agent::Letta),
         "maki" => Some(Agent::Maki),
-        "jcode" => Some(Agent::Jcode),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
@@ -337,7 +329,6 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
             | ("herdr:opencode", "opencode")
             | ("herdr:kilo", "kilo")
             | ("herdr:kimi", "kimi")
-            | ("herdr:jcode", "jcode")
     )
 }
 
@@ -1032,7 +1023,6 @@ mod tests {
             (Agent::Qwen, "qwen"),
             (Agent::Letta, "letta"),
             (Agent::Maki, "maki"),
-            (Agent::Jcode, "jcode"),
             (Agent::Muse, "muse"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
@@ -1057,10 +1047,6 @@ mod tests {
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
     }
-
-    // `jcode_is_hook_authority_without_screen_manifest` moved to
-    // `fork_contract_tests.rs` as `fork_contract_jcode_is_hook_authority_without_screen_manifest`
-    // (fork-owned, see FORK.md F1) - all its symbols were already crate-visible.
 
     #[test]
     fn session_identity_integrations_leave_state_to_screen_detection() {
