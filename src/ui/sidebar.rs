@@ -30,13 +30,6 @@ pub(crate) struct AgentPanelEntry {
     pub agent_kind_label: Option<String>,
     pub state: AgentState,
     pub seen: bool,
-    /// Timestamp this entry's staleness is measured from; see PaneDetail.
-    ///
-    /// Not yet read anywhere: no production caller wires this into the
-    /// stale/parked visualization yet (see `.local/PORT-0.9.0.md`). Kept
-    /// populated so that follow-up only needs to consume it, not re-plumb it.
-    #[allow(dead_code)]
-    pub aged_from: std::time::Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub tokens: std::collections::HashMap<String, String>,
     /// This pane reported a parent that is also in the panel, so it renders as a
@@ -111,7 +104,6 @@ pub(crate) fn agent_panel_entries_from(
                     agent_kind_label: detail.agent_kind_label,
                     state: detail.state,
                     seen: detail.seen,
-                    aged_from: detail.aged_from,
                     last_agent_state_change_seq: detail.last_agent_state_change_seq,
                     tokens: detail.tokens,
                     nested: false,

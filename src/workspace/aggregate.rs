@@ -14,11 +14,6 @@ pub struct PaneDetail {
     pub agent_kind_label: Option<String>,
     pub state: AgentState,
     pub seen: bool,
-    /// The timestamp this pane's staleness is measured from.
-    ///
-    /// The result clock while unread, the last-look clock once seen, so a
-    /// client can age it without knowing which case it is in.
-    pub aged_from: Instant,
     pub last_agent_state_change_seq: Option<u64>,
     pub tokens: HashMap<String, String>,
 }
@@ -45,7 +40,6 @@ impl Tab {
                     agent_kind_label,
                     state: terminal.state,
                     seen: pane.seen,
-                    aged_from: pane_aged_from(pane, terminal),
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
                     tokens: terminal.metadata_tokens.values(),
                 })

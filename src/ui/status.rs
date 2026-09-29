@@ -158,31 +158,6 @@ impl IdleAge {
     }
 }
 
-/// Resolve an idle age for one pane at render time.
-///
-/// `aged_from` is whichever clock applies, chosen by the server side; this only
-/// measures it. Takes a caller-supplied `now` so a whole frame classifies
-/// against one instant instead of re-reading the clock per pane.
-///
-/// Convenience wrapper over `idle_age_for` for a caller holding an `AppState`
-/// directly (e.g. a future server-side render path). The client-shell glyph
-/// wiring (`agent_sidebar::render_agent_row`) calls `idle_age_for` directly
-/// instead, since it only has the elapsed seconds off the wire, not an
-/// `AppState`.
-#[allow(dead_code)]
-pub(crate) fn idle_age_at(
-    app: &crate::app::AppState,
-    seen: bool,
-    aged_from: std::time::Instant,
-    now: std::time::Instant,
-) -> IdleAge {
-    idle_age_for(
-        seen,
-        now.saturating_duration_since(aged_from),
-        app.idle_stale_after,
-    )
-}
-
 /// Classify an idle pane from its acknowledgement and the elapsed time on
 /// whichever clock applies.
 ///
