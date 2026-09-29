@@ -919,6 +919,9 @@ pub(crate) struct ClientShellState {
     pub(super) pane_scroll_in_flight: HashMap<String, u64>,
     pub(super) pane_scroll_queued: HashMap<String, usize>,
     pub(super) pane_scroll_targets: HashMap<String, usize>,
+    /// Predictive local echo (mosh-style), FORK.md F8. Fork-owned state,
+    /// never sent over the wire.
+    pub(super) pane_predictions: HashMap<String, super::predict::PanePrediction>,
     pub(super) copy_feedback: Option<crate::app::state::CopyFeedback>,
     pub(super) copy_feedback_deadline: Option<std::time::Instant>,
     pub(super) host_mouse_pixels: Option<crate::input::mouse::HostPixels>,
@@ -1084,6 +1087,7 @@ impl ClientShellState {
             pane_scroll_in_flight: HashMap::new(),
             pane_scroll_queued: HashMap::new(),
             pane_scroll_targets: HashMap::new(),
+            pane_predictions: HashMap::new(),
             copy_feedback: None,
             copy_feedback_deadline: None,
             host_mouse_pixels: None,
@@ -1865,6 +1869,7 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.next_predictive_echo_expiry())
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)

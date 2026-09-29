@@ -153,6 +153,8 @@ impl ClientShellState {
         rows: u16,
     ) -> Option<crate::client::frame_output::ComposedFrame> {
         self.last_composed_at = Some(std::time::Instant::now());
+        self.reconcile_predictions();
+        self.tick_predictive_echo(self.last_composed_at.expect("just set above"));
         self.selection_repaint_deadline = None;
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
             self.reveal_navigation_workspace = true;
@@ -344,6 +346,7 @@ impl ClientShellState {
             frame.cells[start..start + usize::from(bar.width)].to_vec()
         });
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        self.overlay_predictive_echo(&mut frame, layout.pane_surface);
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         let mut occlusion = crate::kitty_graphics::surface::Occlusion::default();
         let has_selection = self

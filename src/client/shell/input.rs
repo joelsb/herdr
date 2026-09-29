@@ -1052,18 +1052,26 @@ impl ClientShellState {
     }
 
     fn push_pane_key(
-        &self,
+        &mut self,
         target: ClientInputTarget,
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
         if let Some(event) = ClientPaneInputEvent::from_terminal_key(key) {
+            if let ClientInputTarget::Pane(pane_id) = &target {
+                self.record_pane_prediction(pane_id, &event);
+            }
             super::push_target_event(target, event, outcome);
         }
     }
 
-    fn push_focused_pane_event(&self, event: ClientPaneInputEvent, outcome: &mut ClientShellInput) {
+    fn push_focused_pane_event(
+        &mut self,
+        event: ClientPaneInputEvent,
+        outcome: &mut ClientShellInput,
+    ) {
         if let Some(pane_id) = self.focused_pane_id() {
+            self.record_pane_prediction(&pane_id, &event);
             super::push_target_event(ClientInputTarget::Pane(pane_id), event, outcome);
         }
     }
