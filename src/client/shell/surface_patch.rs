@@ -110,6 +110,8 @@ impl ClientShellState {
         &mut self,
         patch: crate::protocol::PaneSurfacePatch,
     ) -> ClientPaneSurfacePatchOutcome {
+        // FORK.md F8: drawn predictive-echo guesses before this patch.
+        let drawn_before = self.drawn_guess_total();
         let Some(current) = self.pane_surface.as_ref() else {
             return ClientPaneSurfacePatchOutcome::Rejected;
         };
@@ -252,7 +254,8 @@ impl ClientShellState {
             }
             self.set_pane_surface(next);
         }
-        ClientPaneSurfacePatchOutcome::Applied(composed_patch)
+        // FORK.md F8: confirm guesses here, echoes rarely pass through compose().
+        self.finish_patch_predictions(drawn_before, composed_patch)
     }
 }
 

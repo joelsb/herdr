@@ -44,6 +44,9 @@ pub(super) struct PredictedGuess {
 pub(super) struct PanePrediction {
     pub(super) epoch: PredictionEpoch,
     pub(super) guesses: Vec<PredictedGuess>,
+    /// Cell right after the last guess the server confirmed. A `Confirmed`
+    /// epoch only holds for a run that starts exactly here (FORK.md F8).
+    pub(super) resume_at: Option<(u16, u16)>,
 }
 
 impl ClientShellState {
@@ -66,7 +69,53 @@ impl ClientShellState {
     /// `input.rs`, before the event is forwarded to the pane). Mouse events
     /// and anything else not explicitly guessable clear the pane's guesses,
     /// fail-closed by default.
+    /// Returns whether what is drawn for the pane changed, so the caller can
+    /// ask the client loop to compose: it only composes after input when the
+    /// outcome requests a repaint, and a guess nobody composes is never seen.
     pub(super) fn record_pane_prediction(
+        &mut self,
+        pane_id: &str,
+        event: &crate::protocol::ClientPaneInputEvent,
+    ) -> bool {
+        let before = self.drawn_guess_count(pane_id);
+        self.record_pane_prediction_inner(pane_id, event);
+        before != self.drawn_guess_count(pane_id)
+    }
+
+    pub(super) fn drawn_guess_total(&self) -> usize {
+        self.pane_predictions
+            .values()
+            .filter(|prediction| prediction.epoch == PredictionEpoch::Confirmed)
+            .map(|prediction| prediction.guesses.len())
+            .sum()
+    }
+
+    /// Called where a server surface patch lands (`apply_pane_surface_patch`).
+    /// Echoes mostly arrive as patches presented straight to the terminal,
+    /// never through `compose()`, so this is where guesses get confirmed. If
+    /// any guess was or still is drawn, the fast-path patch is turned into a
+    /// full compose: presenting the server's row as-is would wipe the faint
+    /// letters still ahead of the echo, or strand a dropped one on screen.
+    pub(super) fn finish_patch_predictions(
+        &mut self,
+        drawn_before: usize,
+        composed_patch: Option<super::surface_patch::ClientComposedSurfacePatch>,
+    ) -> super::surface_patch::ClientPaneSurfacePatchOutcome {
+        self.reconcile_predictions();
+        if drawn_before > 0 || self.drawn_guess_total() > 0 {
+            return super::surface_patch::ClientPaneSurfacePatchOutcome::Applied(None);
+        }
+        super::surface_patch::ClientPaneSurfacePatchOutcome::Applied(composed_patch)
+    }
+
+    fn drawn_guess_count(&self, pane_id: &str) -> usize {
+        self.pane_predictions
+            .get(pane_id)
+            .filter(|prediction| prediction.epoch == PredictionEpoch::Confirmed)
+            .map_or(0, |prediction| prediction.guesses.len())
+    }
+
+    fn record_pane_prediction_inner(
         &mut self,
         pane_id: &str,
         event: &crate::protocol::ClientPaneInputEvent,
@@ -143,21 +192,33 @@ impl ClientShellState {
             // guesses (if any) are left alone.
             return;
         };
-        self.pane_predictions
+        let prediction = self
+            .pane_predictions
             .entry(pane_id.to_string())
-            .or_default()
-            .guesses
-            .push(PredictedGuess {
-                x,
-                y,
-                ch,
-                requested_at: std::time::Instant::now(),
-            });
+            .or_default();
+        if prediction.guesses.is_empty() && prediction.resume_at != Some((x, y)) {
+            // The cursor is not where the server last confirmed an echo: a
+            // new prompt (possibly a password prompt) may be showing, so the
+            // server has to prove echo again before anything is drawn.
+            prediction.epoch = PredictionEpoch::Unconfirmed;
+        }
+        prediction.guesses.push(PredictedGuess {
+            x,
+            y,
+            ch,
+            requested_at: std::time::Instant::now(),
+        });
     }
 
     fn guess_backspace(&mut self, pane_id: &str) {
         if let Some(prediction) = self.pane_predictions.get_mut(pane_id) {
-            prediction.guesses.pop();
+            if prediction.guesses.pop().is_none() {
+                // Erasing server-confirmed text: the server's cursor will
+                // step left, so the next run may still resume right there.
+                prediction.resume_at = prediction
+                    .resume_at
+                    .and_then(|(x, y)| x.checked_sub(1).map(|x| (x, y)));
+            }
         }
     }
 
@@ -242,6 +303,7 @@ impl ClientShellState {
             }
             if cell.symbol == first.ch.to_string() {
                 confirmed_any = true;
+                prediction.resume_at = first.x.checked_add(1).map(|x| (x, first.y));
                 prediction.guesses.remove(0);
             } else {
                 mismatch = true;
@@ -260,7 +322,7 @@ impl ClientShellState {
     /// Drop any pane's guesses that have sat unconfirmed past
     /// [`PREDICTIVE_ECHO_TIMEOUT`]. Returns whether anything changed, so a
     /// caller can decide a repaint is warranted even with no other input.
-    pub(super) fn tick_predictive_echo(&mut self, now: std::time::Instant) -> bool {
+    pub(crate) fn tick_predictive_echo(&mut self, now: std::time::Instant) -> bool {
         let before = self.pane_predictions.len();
         self.pane_predictions.retain(|_, prediction| {
             !prediction
@@ -304,6 +366,23 @@ impl ClientShellState {
                 if let Some(cell) = frame.cells.get_mut(index) {
                     cell.symbol = guess.ch.to_string();
                     cell.modifier |= Modifier::DIM.bits();
+                }
+            }
+            // Draw the cursor after the guessed run, but only when the real
+            // cursor is this run's cursor (it sits where the run started) and
+            // the next cell is still inside the frame.
+            if let (Some(first), Some(last), Some(cursor)) = (
+                prediction.guesses.first(),
+                prediction.guesses.last(),
+                frame.cursor.as_mut(),
+            ) {
+                let start = (
+                    area.x.saturating_add(first.x),
+                    area.y.saturating_add(first.y),
+                );
+                let next_x = area.x.saturating_add(last.x).saturating_add(1);
+                if (cursor.x, cursor.y) == start && next_x < frame.width {
+                    cursor.x = next_x;
                 }
             }
         }

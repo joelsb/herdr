@@ -150,6 +150,7 @@ fn printable_key_in_confirmed_remote_pane_draws_dim_before_any_frame() {
         super::super::predict::PanePrediction {
             epoch: super::super::predict::PredictionEpoch::Confirmed,
             guesses: Vec::new(),
+            resume_at: Some((2, 0)),
         },
     );
 
@@ -174,6 +175,7 @@ fn server_frame_confirming_guess_drops_it_and_stops_drawing_dim() {
         super::super::predict::PanePrediction {
             epoch: super::super::predict::PredictionEpoch::Confirmed,
             guesses: Vec::new(),
+            resume_at: Some((2, 0)),
         },
     );
     state.record_pane_prediction("pane_1", &key_event('x'));
@@ -211,6 +213,7 @@ fn password_prompt_after_enter_never_draws_and_pauses() {
         super::super::predict::PanePrediction {
             epoch: super::super::predict::PredictionEpoch::Confirmed,
             guesses: Vec::new(),
+            resume_at: Some((2, 0)),
         },
     );
 
@@ -254,6 +257,7 @@ fn real_input_dispatch_reaches_predictive_echo() {
         super::super::predict::PanePrediction {
             epoch: super::super::predict::PredictionEpoch::Confirmed,
             guesses: Vec::new(),
+            resume_at: Some((2, 0)),
         },
     );
 
@@ -289,6 +293,7 @@ fn enter_and_arrow_clear_pending_guesses() {
                 ch: 'x',
                 requested_at: std::time::Instant::now(),
             }],
+            resume_at: Some((2, 0)),
         },
     );
 
@@ -319,6 +324,7 @@ fn unconfirmed_guess_older_than_250ms_is_dropped() {
                 ch: 'x',
                 requested_at: stale,
             }],
+            resume_at: Some((2, 0)),
         },
     );
 
@@ -332,4 +338,198 @@ fn unconfirmed_guess_older_than_250ms_is_dropped() {
     let buffer = composed.to_ratatui_buffer().expect("ratatui buffer");
     let cell = &buffer[(area.x + 2, area.y)];
     assert_eq!(cell.symbol().trim(), "");
+}
+
+/// A surface whose cursor sits at `(x, y)` on otherwise blank rows, as if the
+/// program just printed a new prompt somewhere else on screen.
+fn remote_surface_with_cursor_at(x: u16, y: u16, surface_revision: u64) -> PaneSurfaceFrame {
+    let buffer = Buffer::with_lines(["          ", "          "]);
+    let mut surface = blank_remote_surface();
+    surface.surface_revision = surface_revision;
+    surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+        &buffer,
+        Some(crate::protocol::CursorState {
+            x,
+            y,
+            visible: true,
+            shape: 2,
+        }),
+        &[],
+    );
+    surface
+}
+
+fn confirmed_at(x: u16, y: u16) -> super::super::predict::PanePrediction {
+    super::super::predict::PanePrediction {
+        epoch: super::super::predict::PredictionEpoch::Confirmed,
+        guesses: Vec::new(),
+        resume_at: Some((x, y)),
+    }
+}
+
+/// Approved design (FORK.md F8): the cursor is drawn after the guessed
+/// letters, so typing looks like typing, not like text appearing ahead of a
+/// stuck cursor.
+#[test]
+fn guessed_run_moves_the_cursor_past_the_last_guess() {
+    let mut state = remote_state_with_surface();
+    state
+        .pane_predictions
+        .insert("pane_1".to_string(), confirmed_at(2, 0));
+
+    state.record_pane_prediction("pane_1", &key_event('x'));
+    state.record_pane_prediction("pane_1", &key_event('y'));
+
+    let area = state.layout(40, 12).pane_surface;
+    let composed = state.compose(40, 12).expect("composed frame");
+    let cursor = composed.cursor.clone().expect("cursor");
+    assert_eq!(
+        (cursor.x, cursor.y),
+        (area.x + 4, area.y),
+        "cursor must sit right after the two guessed letters"
+    );
+}
+
+/// Password safety beyond Enter: a confirmed epoch belongs to the spot where
+/// the server last confirmed a guess. If the program then draws a new prompt
+/// elsewhere (type-ahead echoed during a command, then `Password:`), the
+/// cursor is no longer there, so nothing typed may be drawn until the server
+/// proves echo again.
+#[test]
+fn confirmed_epoch_does_not_carry_to_a_new_prompt_position() {
+    let mut state = remote_state_with_surface();
+    state
+        .pane_predictions
+        .insert("pane_1".to_string(), confirmed_at(2, 0));
+
+    state.set_pane_surface(remote_surface_with_cursor_at(5, 1, 2));
+    for ch in ['s', 'e', 'c'] {
+        state.record_pane_prediction("pane_1", &key_event(ch));
+        let area = state.layout(40, 12).pane_surface;
+        let composed = state.compose(40, 12).expect("composed frame");
+        let buffer = composed.to_ratatui_buffer().expect("ratatui buffer");
+        for y in 0..2u16 {
+            for x in 0..10u16 {
+                assert_eq!(
+                    buffer[(area.x + x, area.y + y)].symbol().trim(),
+                    "",
+                    "a typed character was drawn at a new prompt the server never echoed at"
+                );
+            }
+        }
+    }
+}
+
+/// The client loop (`src/client/mod.rs`) only composes a new frame after
+/// input when the input outcome asks for a repaint. A guess that does not ask
+/// is recorded and never drawn until the server's echo arrives anyway, which
+/// makes the whole feature invisible in real use while every test that calls
+/// `compose()` itself still passes. Observed 2026-09-29: remote typing median
+/// 54 ms with and without the feature.
+#[test]
+fn typing_a_drawn_guess_requests_a_repaint() {
+    let mut state = remote_state_with_surface();
+    state
+        .pane_predictions
+        .insert("pane_1".to_string(), confirmed_at(2, 0));
+
+    let key = crate::input::TerminalKey::new(
+        crossterm::event::KeyCode::Char('x'),
+        crossterm::event::KeyModifiers::empty(),
+    );
+    let outcome = state.handle_raw_events(vec![crate::raw_input::RawInputEvent::Key(key)]);
+
+    assert!(
+        outcome.repaint,
+        "a drawn guess must ask the client loop to compose, or it is never shown"
+    );
+}
+
+/// The password rule's other half: a guess that is tracked but not drawn
+/// (unconfirmed epoch) must not force a repaint on every keystroke.
+#[test]
+fn typing_an_undrawn_guess_does_not_request_a_repaint() {
+    let mut state = remote_state_with_surface();
+    let key = crate::input::TerminalKey::new(
+        crossterm::event::KeyCode::Char('x'),
+        crossterm::event::KeyModifiers::empty(),
+    );
+    let outcome = state.handle_raw_events(vec![crate::raw_input::RawInputEvent::Key(key)]);
+    assert!(!outcome.repaint);
+}
+
+/// A server patch that echoes `ch` at column `x` of row 0, the shape the
+/// server sends while you type (a changed row span plus the new cursor).
+fn echo_patch(state: &ClientShellState, ch: char, x: u16) -> crate::protocol::PaneSurfacePatch {
+    let current = state.pane_surface.as_ref().expect("surface");
+    let mut cell = current.frame.cells[usize::from(x)].clone();
+    cell.symbol = ch.to_string();
+    crate::protocol::PaneSurfacePatch {
+        boot_id: current.boot_id.clone(),
+        projection_revision: current.projection_revision,
+        base_surface_revision: current.surface_revision,
+        surface_revision: current.surface_revision + 1,
+        panes: current.panes.clone(),
+        rows: vec![crate::protocol::PaneSurfacePatchRow {
+            x,
+            y: 0,
+            cells: vec![cell],
+        }],
+        cursor: Some(crate::protocol::CursorState {
+            x: x + 1,
+            y: 0,
+            visible: true,
+            shape: 2,
+        }),
+    }
+}
+
+/// Server echoes usually arrive as surface patches presented straight to the
+/// terminal without `compose()`. Confirmation must happen where the patch
+/// lands, or the epoch never becomes confirmed in real use and no guess is
+/// ever drawn. Observed 2026-09-29 in a federated client against `ssh-joel`:
+/// guesses recorded, cursor advanced by the echo, zero reconciliations.
+#[test]
+fn server_patch_confirms_the_epoch_without_a_compose() {
+    let mut state = remote_state_with_surface();
+    let _ = state.compose(40, 12);
+    state.record_pane_prediction("pane_1", &key_event('z'));
+
+    let patch = echo_patch(&state, 'z', 2);
+    let _ = state.apply_pane_surface_patch(patch);
+
+    let prediction = state
+        .pane_predictions
+        .get("pane_1")
+        .expect("prediction kept");
+    assert_eq!(
+        prediction.epoch,
+        super::super::predict::PredictionEpoch::Confirmed
+    );
+    assert_eq!(prediction.resume_at, Some((3, 0)));
+}
+
+/// While a guess is drawn, a fast-path patch would repaint the row from the
+/// server's content and wipe the faint letters still ahead of the echo, or
+/// leave a mismatched one on screen. So the patch must ask for a full compose.
+#[test]
+fn patch_while_a_guess_is_drawn_falls_back_to_a_full_compose() {
+    let mut state = remote_state_with_surface();
+    let _ = state.compose(40, 12);
+    state
+        .pane_predictions
+        .insert("pane_1".to_string(), confirmed_at(2, 0));
+    state.record_pane_prediction("pane_1", &key_event('x'));
+    state.record_pane_prediction("pane_1", &key_event('y'));
+
+    let patch = echo_patch(&state, 'x', 2);
+    let outcome = state.apply_pane_surface_patch(patch);
+
+    assert!(
+        matches!(
+            outcome,
+            super::super::surface_patch::ClientPaneSurfacePatchOutcome::Applied(None)
+        ),
+        "a patch landing while guesses are drawn must fall back to compose"
+    );
 }

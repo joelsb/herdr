@@ -1059,7 +1059,7 @@ impl ClientShellState {
     ) {
         if let Some(event) = ClientPaneInputEvent::from_terminal_key(key) {
             if let ClientInputTarget::Pane(pane_id) = &target {
-                self.record_pane_prediction(pane_id, &event);
+                outcome.repaint |= self.record_pane_prediction(pane_id, &event);
             }
             super::push_target_event(target, event, outcome);
         }
@@ -1071,7 +1071,7 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         if let Some(pane_id) = self.focused_pane_id() {
-            self.record_pane_prediction(&pane_id, &event);
+            outcome.repaint |= self.record_pane_prediction(&pane_id, &event);
             super::push_target_event(ClientInputTarget::Pane(pane_id), event, outcome);
         }
     }
