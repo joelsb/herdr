@@ -942,6 +942,10 @@ pub struct UiConfig {
     pub mobile_width_threshold: u16,
     /// Capture mouse input for Herdr's mouse UI. Default: true.
     pub mouse_capture: bool,
+    /// Draw guessed characters at the cursor of a remote pane before the
+    /// server confirms them (mosh-style predictive echo). Only ever applies
+    /// to panes on a remote endpoint; local panes never guess. Default: true.
+    pub predictive_echo: bool,
     /// Copy text selected with the mouse. Default: true.
     pub copy_on_select: bool,
     /// Host cursor policy. Default: auto.
@@ -1204,6 +1208,7 @@ impl Default for UiConfig {
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
+            predictive_echo: true,
             copy_on_select: true,
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),

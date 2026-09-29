@@ -912,6 +912,12 @@
           "description": "Capture mouse input for Herdr's mouse UI."
         },
         {
+          "key": "ui.predictive_echo",
+          "type": "boolean",
+          "default": "true",
+          "description": "Draw guessed characters at the cursor of a remote pane before the server confirms them (mosh-style predictive echo). Only applies to panes on a remote endpoint."
+        },
+        {
           "key": "ui.copy_on_select",
           "type": "boolean",
           "default": "true",
