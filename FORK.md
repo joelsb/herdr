@@ -8,7 +8,7 @@ Fork-local file. Upstream has no `FORK.md`, so it never conflicts.
 ```bash
 export PATH=/var/tmp/xcrun-shim:$PATH      # see Build environment
 export ZIG=/opt/homebrew/bin/zig           # Zig 0.16.0; PATH zig is 0.15.2 and too old
-cargo nextest run fork_contract            # 24 tests + 1 deliberately ignored
+cargo nextest run fork_contract            # 17 tests
 ```
 
 Green means every fork feature in this file survived. A red test names the feature in its own doc comment; come back here, read that `## F<n>` section, and the replication hazard that most likely caused the loss.
@@ -35,7 +35,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `46d8d3f3` | F1 jcode integration (hook asset, config editing, registry, detect gating) - **retired 2026-09-28, do not port** |
 | `e87abeb4` | F1 session anchoring before the first state report + `scripts/verify_jcode_hook.py` - **retired 2026-09-28, do not port** |
 | `b284249d` | F1 re-anchor on `jcode --resume` - **retired 2026-09-28, do not port** |
-| `04278c88` | F2 `close_pane_if_idle` keybinding |
+| `04278c88` | F2 `close_pane_if_idle` keybinding - **removed 2026-09-29** |
 | `61587c39` | F3 pane titles survive a live handoff |
 | `d6b82f42` `c54e7920` `276e8c91` `e5d4df50` | F4 idle aging (buckets, settings, API field, docs) |
 | `9611e6b7` | F5 agents above spaces (**reverted 2026-09-28**, see below) + subagent nesting (server-side data, kept) |
@@ -44,55 +44,20 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `bafc4c59` `2f41a6bc` | 2026-09-27 port: merge of upstream `fff6c820`, 11 conflicts, merge fallout |
 | `a421888d` | F4 glyphs finally rendered from the client snapshot |
 | `ffe76393` | F4 a seen pane ages from the look clock on the wire too |
-| `b6d876ba` | fork-owned rebless of the frozen endpoint-shape fixture |
+| `b6d876ba` | fork-owned rebless of the frozen endpoint-shape fixture - **removed 2026-09-29** with F1 |
 | `b9566910` `fa6d5fab` `a830597f` `eb1e9149` | the fork contract test set |
 | `e065db16` | F6 a moved pane's old public id survives a live handoff |
 | (this branch) | F7 accept moved off the main loop (JSB-17) |
 | (this branch) | F8 predictive local echo (mosh-style) |
+| `13f67ffb` | removed F1 jcode integration |
+| `9b7844de` | removed F2 `close_pane_if_idle` keybinding |
 
 ---
 
-## F1 - jcode integration
+## Removed features
 
-**Retired 2026-09-28 - do not port.** Joel no longer uses jcode. On the next upstream merge, take upstream's side for every jcode hunk and delete the jcode code rather than re-adding it. Nothing has been deleted yet in this commit - this section only records what the next port must remove.
-
-**Files to remove/revert** (upstream owns all of these; taking upstream's version of a file upstream also touches is enough, no jcode re-add):
-
-- `src/integration/assets/jcode/herdr-agent-state.sh` (whole asset)
-- `src/integration/mod.rs` - `JCODE_HOOK_ASSET`, `JCODE_HOOK_INSTALL_NAME`, `JCODE_HOOK_EVENTS`, `JCODE_INTEGRATION_VERSION`
-- `src/integration/env.rs` - `jcode_dir()`
-- `src/integration/targets.rs` - `install_jcode` / `uninstall_jcode`
-- `src/integration/config_edit.rs` - `build_jcode_config_with_hooks` / `remove_jcode_config_hooks`
-- `src/integration/registry.rs`, `actions.rs`, `types.rs`, `src/api/schema/integrations.rs` - the `IntegrationTarget::Jcode` variant and its arity constants
-- `src/cli/integration.rs` - the `Builtin(IntegrationTarget::Jcode)` arm
-- `src/detect/mod.rs` - `Agent::Jcode` in `ALL` and in `full_lifecycle_hook_authority`
-- `src/agent_resume.rs` + `src/persist/restore.rs` - `herdr:jcode` as an official source, and the `jcode --resume <id>` restore path
-- `src/terminal/state.rs` - `("herdr:jcode", "jcode", Some("resume" | "new"))` in the session-replacement allow-list
-- `scripts/verify_jcode_hook.py`
-
-**Fork contract tests to delete** (both files): `fork_contract_install_jcode_*`, `fork_contract_uninstall_jcode_*`, `fork_contract_jcode_toml_*`, `fork_contract_jcode_is_hook_authority_*`, `fork_contract_jcode_resume_*`, `fork_contract_restore_plan_resumes_a_jcode_session`, `fork_contract_jcode_reporter_puts_correct_json_rpc_on_the_wire`.
-
-**The frozen endpoint-shape fixture re-bless goes too.** "Fork-owned deviation: the frozen endpoint-shape fixture" below exists only because `IntegrationTarget::Jcode` changes the `integration.install` shape digest. Once `Jcode` is gone, `tests/fixtures/endpoint-method-shapes-v1.json` and the re-bless reasoning in `src/server/client_commands.rs` return to upstream's version - delete the fork's re-bless, do not carry it forward.
-
-**What it was, for context.** jcode ran in herdr panes with `agent_status=unknown` and never appeared in the Agents panel, so this integration made it a *full lifecycle authority*: hooks owned the state, no screen detection, and the session id was persisted so a server restart relaunched `jcode --resume <id>` instead of a bare shell. `seq = time.time_ns()` and a `pane.report_agent_session` anchor before the first `pane.report_agent` were required because `route_full_lifecycle_hook_report` silently discards an unanchored report - see F6's note below and finding 0039, which this integration's exact shape first surfaced.
-
-**Verify (while it still exists).** `cargo nextest run fork_contract` covers install, idempotent reinstall, uninstall preserving a foreign hook command, TOML round-trip in both string forms, the hook-authority-without-manifest gate, the resume re-anchor, the resume restore plan, and the actual JSON-RPC the script puts on a stand-in socket.
-
----
-
-## F2 - `close_pane_if_idle`
-
-**Purpose.** One bare chord that first reaches the agent and then closes the pane. `alt+x` exits jcode; press it again and the now-idle pane closes.
-
-**Intent.** A plain `close_pane` on a bare chord would kill a pane while the agent still runs. This binding only acts when the pane is free, otherwise the key is forwarded untouched.
-
-**How it works.** `src/config/model.rs` (`close_pane_if_idle: BindingConfig`, empty by default), `src/config/keybinds.rs` (action wiring), `src/client/shell/input.rs::close_focused_pane_if_idle` (returns true only when consumed; fails closed on no snapshot, no focused pane, or any agent entry for that pane), `src/input/keybind_help.rs` and `docs/next/website/src/data/config-reference.json`.
-
-**Fidelity gap, deliberate.** Before v0.9.0 the check was the real one: the pane's foreground job is the pane's own shell, the same signal `agent.start` gates on. v0.9.0 moved key dispatch into the client, which has no live process tree, so the check is now "no agent entry in the cached snapshot" and a pane running `vim` is closeable. `tests/fork_contract.rs` keeps that gap as an explicitly `#[ignore]`d test. Closing it needs a server-side `pane.close_if_idle` method, which is its own task, not a client-side patch.
-
-**Verify.** `fork_contract_close_pane_if_idle_*` - unbound by default, a bare alt chord accepted from config, an agent-free pane closed, a pane with an agent left alone. The decision logic lives entirely in `ClientShellState`, so the test drives `handle_input_bytes` directly rather than the socket.
-
-**Replication hazard.** Upstream reshuffles `src/client/shell/input.rs` often; the call must stay at the top of direct-key handling, before generic forwarding, or the chord reaches the pane and never closes it.
+- **F1 jcode integration** - removed 2026-09-29. Joel no longer uses jcode; retired 2026-09-28, deleted the next day with Joel's approval. Removed the jcode hook asset, all `IntegrationTarget::Jcode`/`Agent::Jcode` wiring (registry, actions, types, API schema, CLI, detect gating, `full_lifecycle_hook_authority`), the `herdr:jcode` resume/restore paths, `scripts/verify_jcode_hook.py`, the F1 fork_contract tests, and the fork-owned re-bless of the frozen endpoint-shape fixture (the fixture and `src/server/client_commands.rs` both returned to upstream's `fff6c820` content). Last commit with it: `ddb578a2`.
+- **F2 `close_pane_if_idle` keybinding** - removed 2026-09-29, Joel approved. One bare chord (unbound by default) that closed the focused pane only when the client's cached snapshot had no agent entry for it. Removed the `BindingConfig`, the keybind wiring, `ClientShellState::close_focused_pane_if_idle` and its call site, the keybind-help entry, the config-reference doc entry, and its fork tests including the `#[ignore]`d fidelity-gap end-to-end test. Last commit with it: `ddb578a2`.
 
 ---
 
@@ -135,7 +100,11 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 
 **Deadline must be in the future (2026-09-28).** `next_idle_age_expiry` (`src/app/actions.rs`) returns only crossings still ahead. Before, one idle pane already past the threshold pinned `idle_age_deadline` to that past instant: every main-loop pass found it due, `repaint_due_idle_age` recomputed the same instant, and the server never slept - 99.5% of a core on Joel's Mac, main thread busy in 4115 of 4116 samples. A fresh throwaway session hides it because no pane has aged yet; reproduce with a pane idle longer than `ui.idle_stale_after_seconds`. Test: `fork_contract_idle_age_deadline_never_lies_in_the_past`. Finding 0042 in `~/MYNE/Projects/tools/docs/findings/`.
 
-**Still dead on purpose.** `src/ui/status.rs::idle_age_at` and `AgentPanelEntry.aged_from` keep `#[allow(dead_code)]`: they are the `AppState`-side equivalents, unused because the client classifies from the wire. Delete them or wire them, but do not assume their presence means the glyph path works - check `render_agent_row` instead.
+**`idle_age_at` and the `AgentPanelEntry`/`PaneDetail` `aged_from` fields were deleted 2026-09-29** (`src/ui/status.rs`, `src/ui/sidebar.rs`, `src/workspace/aggregate.rs`): confirmed unreferenced outside their own definition, so there was nothing left to wire. If a future `AppState`-side render path needs a server-side idle age again, reintroduce it from `crate::workspace::pane_aged_from` and `crate::ui::idle_age_for` directly rather than re-adding a dead wrapper; do not assume its presence would mean the glyph path works - check `render_agent_row` instead, which classifies from the wire (`idle_age_seconds`), not from `AppState`.
+
+**`nest_subagent_entries`, `entry_public_pane_id`, and `AgentPanelEntry::nested` (`src/ui/sidebar.rs`) were reviewed for deletion 2026-09-29 and kept.** The client never reads `.nested` off the wire (`ClientShellAgent` has no such field) and re-derives nesting itself from `parent_pane` tokens (F5 below), so the field looked dead. It is not fully provable dead: `nest_subagent_entries` also reorders the entries `agent_panel_entries_from` produces, and that order feeds `agent_order` on the wire, which the client's `flat_agent_pane_ids` (`src/client/shell/agent_sidebar.rs`) respects for root ordering when a filtered agent view (`agent_view_label.is_some()`) is active, before the client's own `nest()` re-groups children under parents. Whether that root-order dependency is ever client-visible in practice was not proven either way in the time available - see FORK.md F5's own "Replication hazard, the big one" for why this feature has broken silently before. Keeping it is the safe default until someone traces the filtered-view path end to end with a planted case.
+
+**`SUBAGENT_PARENT_TOKEN`** (`src/ui.rs`) stays regardless: the client reads it directly to build nesting (F5 below).
 
 ---
 
@@ -187,14 +156,6 @@ resolves="code":"pane_not_found"`. Diagnosed and left deferred in finding
 **Verify.** `fork_contract_moved_pane_old_id_resolves_after_live_handoff` (`tests/fork_contract.rs`) drives a real cross-workspace move then a real live handoff and requires the old id still resolves. `fork_contract_a_manifest_written_before_public_pane_id_aliases_still_loads` (`src/fork_contract_tests.rs`) requires a manifest missing the field still deserialises, for a handoff between two herdr builds that straddle this change.
 
 **Replication hazard.** Upstream owns `handoff.rs`, `lifecycle.rs`, and `bootstrap.rs`; after any merge, re-check that all three hook lines above still exist verbatim, since a conflict resolution that regenerates `manifest_for`'s call site or `new_from_handoff`'s binding can silently drop them without a compile error (`manifest.public_pane_id_aliases` defaults to empty, `app.import_public_pane_id_aliases` not being called just means the map stays empty - both compile fine and only `fork_contract_moved_pane_old_id_resolves_after_live_handoff` catches it).
-
----
-
-## Fork-owned deviation: the frozen endpoint-shape fixture
-
-`tests/fixtures/endpoint-method-shapes-v1.json` is a compatibility contract, and upstream's rule is never to re-bless a generation-1 expectation. The fork's `IntegrationTarget::Jcode` variant changes the `integration.install` shape digest, so the test failed permanently. In this fork our binary is both client and server, so the fork re-blesses its own copy, with the reasoning at the assertion site in `src/server/client_commands.rs`.
-
-Two consequences a future port must honour: never carry this re-bless upstream, and re-generate it again after re-adding `Jcode` on the next merge. It also means a fork-built client talking to an upstream-built server is out of contract on that method - we do not do that, and `IntegrationTarget` has no `Unknown` fallback to make it safe if we ever did.
 
 ---
 
@@ -325,7 +286,7 @@ otool -tvV ~/.local/bin/herdr \
 
 1. `git fetch upstream && git checkout -b port/<date> master`.
 2. `git merge upstream/master`. Expect the conflicts to cluster exactly where upstream adds its own integrations and agents: `src/integration/*`, `src/detect/mod.rs`, `src/cli/integration.rs`, `src/agent_resume.rs`, `src/client/shell/agent_sidebar.rs`, and the translated `integrations.mdx` tables.
-3. Resolve by taking upstream's structure and re-adding our entry - **except jcode (F1), retired 2026-09-28: for every jcode-related hunk in those files, take upstream's side and let the jcode code disappear, do not re-add it.** Never keep our copy of a file upstream moved or rewrote. Then fix the array-size annotations the compiler flags.
+3. Resolve by taking upstream's structure and re-adding our entry. Never keep our copy of a file upstream moved or rewrote. Then fix the array-size annotations the compiler flags.
 4. `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.
 5. **`cargo nextest run fork_contract`.** This is the whole point of the file: a green run means every feature above survived, and a red one names which did not. Do not go exploring the features by hand first.
 6. Full `cargo nextest run`, compared against the numbers in Ground truth. The frozen endpoint-shape fixture needs re-blessing again (see above).
