@@ -37,7 +37,7 @@ pub(crate) fn accept_pending_client_connections(
 
                 let should_quit = should_quit.clone();
                 let server_event_tx = server_event_tx.clone();
-                std::thread::spawn(move || {
+                let spawned = crate::thread_spawn::spawn_named("herdr-client-conn", move || {
                     if let Err(err) = client_transport::handle_client_handshake(
                         stream,
                         client_id,
@@ -47,6 +47,9 @@ pub(crate) fn accept_pending_client_connections(
                         debug!(client_id, err = %err, "client handshake failed");
                     }
                 });
+                if let Err(err) = spawned {
+                    warn!(client_id, err = %err, "failed to spawn client connection thread; dropping connection");
+                }
             }
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
             Err(err) => {
@@ -119,12 +122,12 @@ pub(crate) fn spawn_unix_client_accept_thread(
     should_quit: Arc<AtomicBool>,
     server_event_tx: mpsc::Sender<ServerEvent>,
     reject_new_clients: Arc<AtomicBool>,
-) {
+) -> io::Result<std::thread::JoinHandle<()>> {
     // Recheck `should_quit` on this cadence even with no connection activity,
     // matching the responsiveness of the previous main-loop poll interval.
     const POLL_TIMEOUT_MS: i32 = 250;
 
-    std::thread::spawn(move || {
+    crate::thread_spawn::spawn_named("herdr-client-accept", move || {
         // The only variant compiled on unix; matches instead of asserting so
         // an interprocess upgrade adding another unix backend fails loudly.
         let LocalListener::UdSocket(inner) = &listener;
@@ -160,5 +163,5 @@ pub(crate) fn spawn_unix_client_accept_thread(
                 break;
             }
         }
-    });
+    })
 }

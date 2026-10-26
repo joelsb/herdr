@@ -1044,7 +1044,8 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
         };
-        let manifest = crate::server::handoff::manifest_for(snapshot, Vec::new(), None, None, None);
+        let manifest =
+            crate::server::handoff::manifest_for(snapshot, Vec::new(), None, None, None, None);
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
             .as_object_mut()

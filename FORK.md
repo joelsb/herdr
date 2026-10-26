@@ -21,10 +21,10 @@ The tests live in two **fork-owned** files that upstream does not have: `tests/f
 |---|---|
 | origin | https://github.com/joelsb/herdr (our fork, branch `master`) |
 | upstream | https://github.com/herdrdev/herdr |
-| upstream point we sit on | `fff6c820` `refactor: extract libghostty-vt binding into ghostty-vt workspace crate (#4661)`, 2026-09-27 |
-| our commits not in upstream | 27 (8 of them this port) |
-| full suite | 3669 passed / 2 failed / 10 skipped; both failures predate the port (`cross_area_agent_process_survives_detach_and_reattach`, `api_ping pane_info_and_subscriptions_expose_done_agent_status`) |
-| verified | 2026-09-27, by running the commands in this file |
+| upstream point we sit on | `2ecf19a9` stable `v0.9.5`, 2026-10-14 |
+| our commits not in upstream | 55, including the `v0.9.5` merge commit |
+| full suite | 3901 passed / 2 failed / 13 skipped; both failures predate the port (`cross_area_agent_process_survives_detach_and_reattach`, `api_ping pane_info_and_subscriptions_expose_done_agent_status`) |
+| verified | 2026-10-26, by running the commands in this file |
 
 Recompute any time: `git merge-base master upstream/master`, `git log --oneline $(git merge-base master upstream/master)..master`, `git diff --stat $(git merge-base master upstream/master)..master -- . ':(exclude)vendor'`.
 
@@ -51,6 +51,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | (this branch) | F8 predictive local echo (mosh-style) |
 | `13f67ffb` | removed F1 jcode integration |
 | `9b7844de` | removed F2 `close_pane_if_idle` keybinding |
+| (this branch) | merge stable `v0.9.5`, preserve F3-F8, and retain control polling needed for prompt shutdown |
 
 ---
 
@@ -183,7 +184,7 @@ resolves="code":"pane_not_found"`. Diagnosed and left deferred in finding
 
 **Verify.** `fork_contract_busy_render_loop_does_not_drive_per_pass_accept_calls` (`tests/fork_contract.rs`) drives a real spawned server with one real attached client and one real pane in a busy write loop, then asserts from the real `herdr-server.log` that `loop.tick` was clearly elevated (proving the busy-render scenario actually happened) while `accept.attempt` stayed near zero (proving accept did not ride along on those passes). Reverting just this fix (keeping the counter) reproduces `loop.tick=83 accept.attempt=82` and fails the assertion; this is the exact RED observed while developing the fix, kept here as the regression signature to look for if this is ever undone.
 
-**Replication hazard.** This fix touches upstream-owned `src/server/headless.rs`, `src/server/client_accept.rs` and `src/server/headless/lifecycle.rs`. On the next upstream merge: **check whether upstream fixed this differently first** - `accept_client_connections`'s unix/windows split and the `CLIENT_ACCEPT_POLL_INTERVAL` main-loop poll are exactly the kind of thing upstream might solve on their own (they already solved it for Windows). If upstream ships its own fix, prefer it and drop this patch rather than carrying two solutions to the same problem; if not, re-apply this same shape (dedicated poll-gated accept thread, `handoff_reject_new_clients` atomic mirroring `handoff_in_progress`) after resolving whatever the merge conflict looks like. If `accept_client_connections` or `next_client_id` come back from a conflict resolution that took upstream's side wholesale, that is the sign this patch was silently dropped rather than merged - `fork_contract_busy_render_loop_does_not_drive_per_pass_accept_calls` will not go red on its own for this, since the function reappearing does not by itself fail the test until something actually drives a busy render loop against it (which the test does), so treat any full-file revert of `headless.rs` as a reason to re-check this section by hand, not just by running the suite.
+**Replication hazard.** This fix touches upstream-owned `src/server/headless.rs`, `src/server/client_accept.rs` and `src/server/headless/lifecycle.rs`. On the next upstream merge: **check whether upstream fixed this differently first** - `accept_client_connections`'s unix/windows split and the main-loop control poll are exactly the kind of thing upstream might solve on their own (they already solved accept for Windows). If upstream ships its own accept fix, prefer it and drop this patch rather than carrying two solutions to the same problem; if not, re-apply this same shape (dedicated poll-gated accept thread, `handoff_reject_new_clients` atomic mirroring `handoff_in_progress`) after resolving whatever the merge conflict looks like. Keep `SERVER_CONTROL_POLL_INTERVAL` or replace it with a real wake signal: after `v0.9.5`, `server.stop` sets a shared flag and an idle loop without either mechanism waits indefinitely. If `accept_client_connections` or `next_client_id` come back from a conflict resolution that took upstream's side wholesale, that is the sign this patch was silently dropped rather than merged - `fork_contract_busy_render_loop_does_not_drive_per_pass_accept_calls` catches it under load, while `unavailable_restored_pane_keeps_saved_cwd_in_server` catches a dropped control wake because server shutdown misses its 10-second bound.
 
 ---
 

@@ -147,6 +147,10 @@ pub enum ClientInputEvent {
     },
     FocusGained,
     FocusLost,
+    HostDefaultColor {
+        kind: ClientHostDefaultColorKind,
+        color: ClientHostColor,
+    },
 }
 
 /// Pane-domain input after the client has classified and consumed shell actions.
@@ -393,29 +397,6 @@ impl ClientPaneInputEvent {
 
 #[cfg(any(windows, test))]
 impl ClientInputEvent {
-    pub(crate) fn from_crossterm(event: crossterm::event::Event) -> Option<Self> {
-        match event {
-            crossterm::event::Event::Key(key) => Some(Self::Key {
-                code: ClientKeyCode::from_crossterm(key.code)?,
-                modifiers: key.modifiers.bits(),
-                kind: ClientKeyKind::from_crossterm(key.kind),
-                repeat_count: 1,
-                generated_text: None,
-                source: ClientKeySource::Synthesized,
-            }),
-            crossterm::event::Event::Mouse(mouse) => Some(Self::Mouse {
-                kind: ClientMouseKind::from_crossterm(mouse.kind)?,
-                column: mouse.column,
-                row: mouse.row,
-                modifiers: mouse.modifiers.bits(),
-            }),
-            crossterm::event::Event::Paste(text) => Some(Self::Paste { text }),
-            crossterm::event::Event::FocusGained => Some(Self::FocusGained),
-            crossterm::event::Event::FocusLost => Some(Self::FocusLost),
-            crossterm::event::Event::Resize(_, _) => None,
-        }
-    }
-
     pub(crate) fn to_raw_input_event(&self) -> crate::raw_input::RawInputEvent {
         match self {
             Self::Key {
@@ -458,6 +439,19 @@ impl ClientInputEvent {
             Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
             Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
             Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
+            Self::HostDefaultColor { kind, color } => {
+                crate::raw_input::RawInputEvent::HostDefaultColor {
+                    kind: match kind {
+                        ClientHostDefaultColorKind::Foreground => {
+                            crate::terminal_theme::DefaultColorKind::Foreground
+                        }
+                        ClientHostDefaultColorKind::Background => {
+                            crate::terminal_theme::DefaultColorKind::Background
+                        }
+                    },
+                    color: (*color).into(),
+                }
+            }
         }
     }
 }
@@ -2220,11 +2214,7 @@ mod tests {
         };
         assert!(key.is_windows_dead_key());
         assert_eq!(key.windows_record(), None);
-        assert!(crate::input::encode_terminal_key(
-            key,
-            crate::input::KeyboardProtocol::Kitty { flags: 1 },
-        )
-        .is_empty());
+        assert!(crate::pane::test_encode_key_for_app(b"\x1b[>1u", key).is_empty());
     }
 
     #[tokio::test]
@@ -2302,10 +2292,7 @@ mod tests {
         };
 
         assert!(roundtripped.has_physical_identity());
-        let encoded = crate::input::encode_terminal_key(
-            roundtripped,
-            crate::input::KeyboardProtocol::Kitty { flags: 8 },
-        );
+        let encoded = crate::pane::test_encode_key_for_app(b"\x1b[>8u", roundtripped);
         assert_ne!(encoded, b"/");
         assert!(encoded.starts_with(b"\x1b["));
     }
