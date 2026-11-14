@@ -21,7 +21,9 @@ mod tab;
 
 use self::git::git_status_cache_key_for_space;
 pub(crate) use self::{
-    aggregate::pane_aged_from, git::git_status_snapshot_for_cwd_with_demand, tab::MovedPane,
+    aggregate::{has_working_subagent, pane_aged_from},
+    git::git_status_snapshot_for_cwd_with_demand,
+    tab::MovedPane,
 };
 pub use self::{
     git::{

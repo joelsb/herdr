@@ -47,6 +47,10 @@ pub(crate) use state::*;
 // idle-aging glyphs (FORK.md F4) actually reach the drawn row.
 #[cfg(test)]
 pub(crate) use agent_sidebar::{render_agent_row, AgentRow};
+// Fork contract test surface only: FORK.md F9 drives the tab/space status
+// projection directly.
+#[cfg(test)]
+pub(crate) use endpoint_agent_state::project_aggregate_status;
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;
 pub(super) use surface_patch::{ClientComposedSurfacePatch, ClientPaneSurfacePatchOutcome};

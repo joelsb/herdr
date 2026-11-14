@@ -8,7 +8,7 @@ Fork-local file. Upstream has no `FORK.md`, so it never conflicts.
 ```bash
 export PATH=/var/tmp/xcrun-shim:$PATH      # see Build environment
 export ZIG=/opt/homebrew/bin/zig           # Zig 0.16.0; PATH zig is 0.15.2 and too old
-cargo nextest run fork_contract            # 17 tests
+cargo nextest run fork_contract            # 19 tests
 ```
 
 Green means every fork feature in this file survived. A red test names the feature in its own doc comment; come back here, read that `## F<n>` section, and the replication hazard that most likely caused the loss.
@@ -49,6 +49,7 @@ Recompute any time: `git merge-base master upstream/master`, `git log --oneline 
 | `e065db16` | F6 a moved pane's old public id survives a live handoff |
 | (this branch) | F7 accept moved off the main loop (JSB-17) |
 | (this branch) | F8 predictive local echo (mosh-style) |
+| (this branch) | F9 a parent with a working subagent is not done (JSB-86) |
 | `13f67ffb` | removed F1 jcode integration |
 | `9b7844de` | removed F2 `close_pane_if_idle` keybinding |
 
@@ -221,6 +222,23 @@ resolves="code":"pane_not_found"`. Diagnosed and left deferred in finding
 **Verify.** `client::shell::tests::predict::*` (`src/client/shell/tests/predict.rs`), thirteen tests, including `local_endpoint_pane_never_predicts` (#4 in the spec), `printable_key_in_confirmed_remote_pane_draws_dim_before_any_frame` (#1), `server_frame_confirming_guess_drops_it_and_stops_drawing_dim` (#2), `password_prompt_after_enter_never_draws_and_pauses` (#3), `real_input_dispatch_reaches_predictive_echo` (wiring, not in the numbered spec list but see the hazard below), `enter_and_arrow_clear_pending_guesses` (#5), `unconfirmed_guess_older_than_250ms_is_dropped` (#6). Every one of the six spec behaviours, plus the wiring test, was confirmed RED by temporarily reverting the exact mechanism it depends on (documented in the implementation plan, `.local/prd/2026-09-29-predictive-echo.md`, gitignored) before being confirmed GREEN again - not merely observed to pass once.
 
 **Replication hazard.** This feature touches five upstream-owned files with minimal hunks: `input.rs` (`push_pane_key`/`push_focused_pane_event` signature change plus one `outcome.repaint |=` call each), `composition.rs` (two one-line calls inside `compose()`), `state.rs` (one field, one initializer, one line folded into `timer_delay()`), `surface_patch.rs` (`drawn_before` at the top of `apply_pane_surface_patch`, `finish_patch_predictions` at the end), `src/client/mod.rs` (one `tick_predictive_echo` in the timer tick chain). `src/client/shell/predict.rs` and `src/client/shell/tests/predict.rs` are new, fork-owned files immune to upstream conflicts by construction. The real hazard is a merge conflict resolution in one of the three touched files silently dropping its hook line: the code would still compile (predict.rs's methods would just go unused, at most a dead-code warning), and every test that calls `record_pane_prediction` or seeds `pane_predictions` directly would still pass, because they bypass the dropped wiring entirely. Only `real_input_dispatch_reaches_predictive_echo` (drives the real `handle_raw_events` -> `handle_key` -> `push_pane_key` path) would catch a dropped `input.rs` hook; nothing in this file's own tests would catch a dropped `composition.rs` or `timer_delay` hook (a manual live check, per the LIVE CHECK section of the task this shipped under, is the only thing that would surface those). After any upstream merge that touches `input.rs`, `composition.rs`, or `state.rs::timer_delay`, re-check these three hunks by hand, not just by running the suite. Also note: `cargo nextest run fork_contract` (the file's own "run this first" recipe) does **not** cover this feature - its tests are named `client::shell::tests::predict::*`, not `fork_contract_*`, because the feature's own new files make it immune to the specific merge-conflict class that convention protects against; use `cargo nextest run fork_contract client::shell` (as this feature's own verification did) to also cover it.
+
+---
+
+## F9 - a parent with a working subagent is not done (JSB-86)
+
+**Purpose.** A coordinator that finishes its own turn while a subagent it spawned still runs showed its tab and space as `done`, because upstream ranks an unread result (`Idle` + unseen, priority 3) above `Working` (2). The work was not done, so the tab must say `working`.
+
+**How it works.** `has_working_subagent` (`src/workspace/aggregate.rs`) takes `(pane id, parent_pane token, working)` per pane and marks every ancestor of a working pane, walking F5's `parent_pane` links with a bounded loop so a cycle cannot hang. A marked pane that is `Idle` (seen or unseen) counts as `Working` in the aggregate; `Blocked` still wins. Two callers, because status is aggregated twice:
+
+- Server: `Workspace::aggregate_panes` backs both `aggregate_state` (space) and `tab_aggregate_state` (tab); `tab_info` (`src/app/creation.rs`) now calls `tab_aggregate_state` instead of its own copy of the max-by-priority loop. Feeds the API (`herdr tab list`, `workspace list`) and the client snapshot.
+- Client: `project_aggregate_status` (`src/client/shell/endpoint_agent_state.rs`) re-projects tab and space status from the agent list after the client's own seen/unseen projection, so it applies the same rule or the tab bar would say `done` again.
+
+Only linked panes change: two unrelated panes, one done and one working, still show `done`. Only the aggregate changes: the parent's own agent row keeps its real state. A parent in another tab than its subagent is not promoted at tab level (the space still is); `pi-interactive-subagents` splits in the same tab.
+
+**Verify.** `fork_contract_working_subagent_keeps_tab_and_space_working` (server) and `fork_contract_client_projection_keeps_tab_working_while_subagent_runs` (client, includes the unlinked and blocked cases). Live: on an isolated server, `pane report-agent` both panes working, focus another space, report the parent idle, `pane report-metadata <child> --source pi.subagents --token parent_pane=<parent>`; `herdr tab list` says `working`, and `done` once the child reports idle. The pre-fix binary says `done` with the link.
+
+**Replication hazard.** `tab_info` and `project_aggregate_status` are upstream-owned. A merge that restores upstream's inline loop in `tab_info` or upstream's `project_aggregate_status` body compiles cleanly and drops the rule for that half only; each half has its own fork test so the red one names it.
 
 ---
 
