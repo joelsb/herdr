@@ -175,13 +175,38 @@ impl EndpointAgentPresentation {
     }
 }
 
-fn project_aggregate_status(snapshot: &mut ClientShellSnapshot) {
+pub(crate) fn project_aggregate_status(snapshot: &mut ClientShellSnapshot) {
+    let entries = snapshot
+        .agents
+        .iter()
+        .map(|agent| {
+            (
+                agent.pane_id.as_str(),
+                agent
+                    .tokens
+                    .iter()
+                    .find(|(key, _)| key == crate::ui::SUBAGENT_PARENT_TOKEN)
+                    .map(|(_, parent)| parent.as_str()),
+                agent.agent_status == AgentStatus::Working,
+            )
+        })
+        .collect::<Vec<_>>();
+    let statuses = snapshot
+        .agents
+        .iter()
+        .zip(crate::workspace::has_working_subagent(&entries))
+        .map(|(agent, promoted)| match agent.agent_status {
+            AgentStatus::Idle | AgentStatus::Done if promoted => AgentStatus::Working,
+            status => status,
+        })
+        .collect::<Vec<_>>();
     for tab in &mut snapshot.tabs {
         if let Some(status) = snapshot
             .agents
             .iter()
-            .filter(|agent| agent.tab_id == tab.tab_id)
-            .map(|agent| agent.agent_status)
+            .zip(&statuses)
+            .filter(|(agent, _)| agent.tab_id == tab.tab_id)
+            .map(|(_, status)| *status)
             .max_by_key(|status| super::status_priority(*status))
         {
             tab.agent_status = status;
@@ -191,8 +216,9 @@ fn project_aggregate_status(snapshot: &mut ClientShellSnapshot) {
         if let Some(status) = snapshot
             .agents
             .iter()
-            .filter(|agent| agent.workspace_id == workspace.workspace_id)
-            .map(|agent| agent.agent_status)
+            .zip(&statuses)
+            .filter(|(agent, _)| agent.workspace_id == workspace.workspace_id)
+            .map(|(_, status)| *status)
             .max_by_key(|status| super::status_priority(*status))
         {
             workspace.agent_status = status;

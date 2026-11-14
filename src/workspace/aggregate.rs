@@ -78,22 +78,93 @@ fn pane_attention_priority(state: AgentState, seen: bool) -> u8 {
     }
 }
 
+/// Per entry `(pane id, parent pane id, working)`: whether a working pane
+/// descends from it through `parent_pane` links. A coordinator that finished
+/// its turn while a subagent it spawned still runs is not done, so tab and
+/// space aggregates count it as working (FORK.md F9).
+pub(crate) fn has_working_subagent(entries: &[(&str, Option<&str>, bool)]) -> Vec<bool> {
+    let mut marked = vec![false; entries.len()];
+    for &(_, mut parent, working) in entries {
+        if !working {
+            continue;
+        }
+        // Bounded walk, so a parent_pane cycle cannot loop forever.
+        for _ in 0..entries.len() {
+            let Some(index) =
+                parent.and_then(|parent| entries.iter().position(|(id, _, _)| *id == parent))
+            else {
+                break;
+            };
+            marked[index] = true;
+            parent = entries[index].1;
+        }
+    }
+    marked
+}
+
 impl Workspace {
     pub fn aggregate_state(
         &self,
         terminals: &HashMap<TerminalId, TerminalState>,
     ) -> AggregateStatus {
-        self.tabs
+        self.aggregate_panes(self.tabs.iter().flat_map(|tab| tab.panes.iter()), terminals)
+    }
+
+    pub fn tab_aggregate_state(
+        &self,
+        tab_idx: usize,
+        terminals: &HashMap<TerminalId, TerminalState>,
+    ) -> AggregateStatus {
+        self.aggregate_panes(
+            self.tabs
+                .get(tab_idx)
+                .into_iter()
+                .flat_map(|tab| tab.panes.iter()),
+            terminals,
+        )
+    }
+
+    fn aggregate_panes<'a>(
+        &self,
+        panes: impl Iterator<Item = (&'a PaneId, &'a crate::pane::PaneState)>,
+        terminals: &HashMap<TerminalId, TerminalState>,
+    ) -> AggregateStatus {
+        let panes = panes
+            .filter_map(|(id, pane)| {
+                let terminal = terminals.get(&pane.attached_terminal_id)?;
+                let public_id = self
+                    .public_pane_number(*id)
+                    .map(|number| super::public_pane_id_for_number(&self.id, number))
+                    .unwrap_or_default();
+                let parent = terminal
+                    .metadata_tokens
+                    .values()
+                    .remove(crate::ui::SUBAGENT_PARENT_TOKEN);
+                Some((pane, terminal, public_id, parent))
+            })
+            .collect::<Vec<_>>();
+        let entries = panes
             .iter()
-            .flat_map(|tab| tab.panes.values())
-            .filter_map(|pane| {
-                terminals
-                    .get(&pane.attached_terminal_id)
-                    .map(|terminal| AggregateStatus {
-                        state: terminal.state,
-                        seen: pane.seen,
-                        aged_from: pane_aged_from(pane, terminal),
-                    })
+            .map(|(_, terminal, id, parent)| {
+                (
+                    id.as_str(),
+                    parent.as_deref(),
+                    terminal.state == AgentState::Working,
+                )
+            })
+            .collect::<Vec<_>>();
+        let promoted = has_working_subagent(&entries);
+        panes
+            .iter()
+            .zip(promoted)
+            .map(|((pane, terminal, _, _), promoted)| AggregateStatus {
+                state: if promoted && terminal.state == AgentState::Idle {
+                    AgentState::Working
+                } else {
+                    terminal.state
+                },
+                seen: pane.seen,
+                aged_from: pane_aged_from(pane, terminal),
             })
             .max_by_key(|status| pane_attention_priority(status.state, status.seen))
             .unwrap_or(AggregateStatus {

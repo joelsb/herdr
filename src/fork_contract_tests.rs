@@ -1208,4 +1208,172 @@ mod tests {
             "the 0039 shape must be named, not silently discarded"
         );
     }
+
+    // -----------------------------------------------------------------
+    // FORK.md F9 - a parent with a working subagent is not done
+    // -----------------------------------------------------------------
+
+    /// FORK.md F9, server half: a tab and a space whose coordinator finished
+    /// (idle, unread) while a subagent it spawned (`parent_pane` token) still
+    /// works must aggregate to Working, not Done. Without the link, the
+    /// upstream rule stands: an unread result outranks work elsewhere.
+    #[test]
+    fn fork_contract_working_subagent_keeps_tab_and_space_working() {
+        use crate::detect::AgentState;
+        use std::collections::HashMap;
+
+        let mut ws = crate::workspace::Workspace::test_new("fork-subagent-status");
+        let parent = ws.tabs[0].root_pane;
+        let child = ws.test_split(ratatui::layout::Direction::Horizontal);
+        let parent_public = crate::workspace::public_pane_id_for_number(
+            &ws.id,
+            ws.public_pane_number(parent).expect("parent number"),
+        );
+        let terminal = |ws: &crate::workspace::Workspace, pane, state| {
+            let mut terminal = crate::terminal::TerminalState::new(
+                ws.terminal_id(pane).expect("terminal").clone(),
+                "/tmp".into(),
+            );
+            terminal.state = state;
+            terminal
+        };
+        let parent_terminal = terminal(&ws, parent, AgentState::Idle);
+        let child_terminal = terminal(&ws, child, AgentState::Working);
+        ws.tabs[0].panes.get_mut(&parent).expect("parent pane").seen = false;
+
+        let mut terminals = HashMap::new();
+        terminals.insert(parent_terminal.id.clone(), parent_terminal);
+        let child_id = child_terminal.id.clone();
+        terminals.insert(child_id.clone(), child_terminal);
+        assert_eq!(
+            ws.tab_aggregate_state(0, &terminals).state,
+            AgentState::Idle,
+            "unlinked panes keep upstream's rule: unread done outranks working"
+        );
+
+        terminals
+            .get_mut(&child_id)
+            .expect("child terminal")
+            .metadata_tokens
+            .patch(
+                HashMap::from([("parent_pane".to_string(), Some(parent_public))]),
+                None,
+                Instant::now(),
+            );
+        assert_eq!(
+            ws.tab_aggregate_state(0, &terminals).state,
+            AgentState::Working,
+            "a tab whose parent is done but whose subagent works is not done"
+        );
+        assert_eq!(
+            ws.aggregate_state(&terminals).state,
+            AgentState::Working,
+            "the space follows the same rule"
+        );
+    }
+
+    /// FORK.md F9, client half: the client re-projects tab and space status
+    /// from its agent list (seen/unseen is client-side), so the same rule must
+    /// hold there or the tab bar shows done while the subagent runs.
+    #[test]
+    fn fork_contract_client_projection_keeps_tab_working_while_subagent_runs() {
+        use crate::api::schema::AgentStatus;
+        use crate::protocol::{
+            ClientShellAgent, ClientShellSnapshot, ClientShellTab, ClientShellWorkspace,
+        };
+
+        let agent = |pane_id: &str, status, parent: Option<&str>| ClientShellAgent {
+            pane_id: pane_id.into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: None,
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: status,
+            state_change_seq: 1,
+            state_labels: Vec::new(),
+            tokens: parent
+                .map(|parent| vec![("parent_pane".into(), parent.into())])
+                .unwrap_or_default(),
+            state_age_seconds: None,
+            idle_age_seconds: None,
+            focused: false,
+        };
+        let snapshot = |agents| ClientShellSnapshot {
+            boot_id: "boot-1".into(),
+            revision: 1,
+            config_diagnostic: None,
+            product_announcement: None,
+            update_available: None,
+            update_install_command: "herdr update".into(),
+            server_keybindings_toml: None,
+            latest_release_notes_available: false,
+            integration_updates_available: false,
+            worktree_directory: "/tmp/herdr-worktrees".into(),
+            release_notes: None,
+            focused_workspace_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            tab_bar_right: Vec::new(),
+            tab_bar_right_separator: " ".into(),
+            agent_view_label: None,
+            agent_order: Vec::new(),
+            workspaces: vec![ClientShellWorkspace {
+                workspace_id: "ws_1".into(),
+                active_tab_id: "tab_1".into(),
+                new_workspace_cwd: "/repo".into(),
+                number: 1,
+                label: "ws".into(),
+                custom_label: false,
+                branch: None,
+                git_ahead_behind: None,
+                tokens: Vec::new(),
+                worktree: None,
+                focused: true,
+                agent_status: AgentStatus::Unknown,
+            }],
+            tabs: vec![ClientShellTab {
+                tab_id: "tab_1".into(),
+                workspace_id: "ws_1".into(),
+                number: 1,
+                label: "1".into(),
+                custom_label: false,
+                zoomed: false,
+                focused: true,
+                agent_status: AgentStatus::Unknown,
+            }],
+            panes: Vec::new(),
+            agents,
+            commands: Vec::new(),
+        };
+
+        let mut unlinked = snapshot(vec![
+            agent("pane_1", AgentStatus::Done, None),
+            agent("pane_2", AgentStatus::Working, None),
+        ]);
+        crate::client::shell::project_aggregate_status(&mut unlinked);
+        assert_eq!(unlinked.tabs[0].agent_status, AgentStatus::Done);
+
+        let mut linked = snapshot(vec![
+            agent("pane_1", AgentStatus::Done, None),
+            agent("pane_2", AgentStatus::Working, Some("pane_1")),
+        ]);
+        crate::client::shell::project_aggregate_status(&mut linked);
+        assert_eq!(linked.tabs[0].agent_status, AgentStatus::Working);
+        assert_eq!(linked.workspaces[0].agent_status, AgentStatus::Working);
+
+        let mut blocked = snapshot(vec![
+            agent("pane_1", AgentStatus::Blocked, None),
+            agent("pane_2", AgentStatus::Working, Some("pane_1")),
+        ]);
+        crate::client::shell::project_aggregate_status(&mut blocked);
+        assert_eq!(
+            blocked.tabs[0].agent_status,
+            AgentStatus::Blocked,
+            "a parent waiting on input still wins"
+        );
+    }
 }
